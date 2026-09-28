@@ -63,6 +63,7 @@ dmypy.json
 
 # pyenv
 .python-version
+!backend/.python-version
 
 # 환경변수 파일
 backend/.env
