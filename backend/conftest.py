@@ -30,12 +30,16 @@ for key, value in {
 @pytest.fixture(autouse=True)
 def isolate_cache_and_database():
     from app.api.v1.flights import get_amadeus_service, get_cache_service
-    from app.api.v1.regions import get_monthly_analyzer
+    from app.api.v1.regions import get_monthly_search_service
     from app.core.database import Base, engine, init_db
     from app.services.cache_service import CacheService
 
     CacheService._shared_memory_cache.clear()
-    for provider in (get_amadeus_service, get_cache_service, get_monthly_analyzer):
+    for provider in (
+        get_amadeus_service,
+        get_cache_service,
+        get_monthly_search_service,
+    ):
         provider.cache_clear()
     init_db()
     yield
