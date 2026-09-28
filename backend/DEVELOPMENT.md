@@ -28,7 +28,6 @@ make dev
 | DB 마이그레이션 | `make migrate` |
 | 수집 worker | `make worker` |
 | 예약 수집 | `make beat` |
-| 선택적 Git 훅 설치 | `make install-pre-commit` |
 
 `make check`와 CI는 잠금 파일 일치, Black·isort·치명적 flake8 오류, 전체 테스트, 핵심 경로 커버리지 80%를 확인합니다. 선택적인 `make typecheck`와 `make security`는 기존 코드의 추가 점검용이며 CI 통과 기준에 포함되지 않습니다. `make check`는 소스 형식을 자동으로 수정하지 않습니다.
 
