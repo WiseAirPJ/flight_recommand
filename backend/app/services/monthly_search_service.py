@@ -79,10 +79,9 @@ class MonthlySearchService:
                 # Only the owner of this version can claim it. A concurrent caller
                 # will observe its pending token and return the same job.
                 old_token = row.token
-                resume = (
-                    row.status != "ready"
-                    and row.checkpoint.get("day") == date.today().isoformat()
-                )
+                # Old quotes may still contain unsaved observations. The worker
+                # persists those before discarding expired search progress.
+                resume = row.status != "ready"
                 claimed = session.execute(
                     update(MonthlySearch)
                     .where(
@@ -230,16 +229,20 @@ class MonthlySearchService:
         )
 
     def retry(self, key, token, delay):
+        # A redelivery of the previous attempt must not claim its successor.
+        next_token = uuid4().hex
         self._owned_update(
             key,
             token,
+            token=next_token,
             status="pending",
             error="일부 검색 또는 이력 저장을 재시도합니다.",
             lease_until=self.clock()
             + timedelta(seconds=delay + settings.MONTHLY_JOB_LEASE_SECONDS),
         )
+        return next_token
 
-    def _owned_update(self, key, token, **values):
+    def _owned_update(self, key, owner_token, **values):
         now = self.clock()
         values.setdefault(
             "lease_until", now + timedelta(seconds=settings.MONTHLY_JOB_LEASE_SECONDS)
@@ -249,7 +252,7 @@ class MonthlySearchService:
                 update(MonthlySearch)
                 .where(
                     MonthlySearch.key == key,
-                    MonthlySearch.token == token,
+                    MonthlySearch.token == owner_token,
                     MonthlySearch.status == "running",
                     MonthlySearch.lease_until > now,
                 )

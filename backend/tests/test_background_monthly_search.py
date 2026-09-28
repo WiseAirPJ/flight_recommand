@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
+from copy import deepcopy
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -175,6 +176,40 @@ def test_policy_and_search_conditions_have_distinct_jobs(store, monkeypatch):
     assert enqueue.call_count == 8
 
 
+def test_retry_rejects_previous_delivery_and_owner(store):
+    service, _, enqueue = store
+    service.request(search_request())
+    key, old_token = enqueue.call_args.args
+    service.claim(key, old_token)
+    new_token = service.retry(key, old_token, delay=60)
+    assert service.claim(key, old_token) is None
+    assert new_token and new_token != old_token
+    assert service.claim(key, new_token) is not None
+    with pytest.raises(LeaseLost):
+        service.heartbeat(key, old_token)
+    with pytest.raises(LeaseLost):
+        service.complete(key, old_token, result_for(search_request()))
+    service.fail(key, old_token, "late failure")
+    service.complete(key, new_token, result_for(search_request()))
+    assert service.request(search_request())["data"]["status"] == "ready"
+
+
+def test_replacement_keeps_previous_day_checkpoint_for_history_recovery(store):
+    service, clock, enqueue = store
+    service.request(search_request())
+    key, token = enqueue.call_args.args
+    service.claim(key, token)
+    checkpoint = {
+        "day": (date.today() - timedelta(days=1)).isoformat(),
+        "quotes": {"NRT:old": {"meta": {"history_saved": False}}},
+    }
+    service.checkpoint(key, token, checkpoint)
+    clock.now += timedelta(seconds=settings.MONTHLY_JOB_LEASE_SECONDS + 1)
+    service.request(search_request())
+    _, replacement = enqueue.call_args.args
+    assert service.claim(key, replacement)[2] == checkpoint
+
+
 def test_map_cold_response_is_202_without_calling_provider(store, monkeypatch):
     service, _, enqueue = store
     provider = AsyncMock(side_effect=AssertionError("API must not collect quotes"))
@@ -230,7 +265,10 @@ def test_worker_retries_only_failed_quote_and_fences_duplicate_delivery(
     with SessionLocal() as session:
         row = session.get(MonthlySearch, key)
         assert row.status == "pending" and len(row.checkpoint["quotes"]) == 6
-    assert tasks.run_monthly_search.run(key, token)["status"] == "ready"
+    retry_args = tasks.run_monthly_search.retry.call_args.kwargs["args"]
+    assert retry_args[0] == key and retry_args[1] != token
+    assert tasks.run_monthly_search.run(key, token)["status"] == "superseded"
+    assert tasks.run_monthly_search.run(*retry_args)["status"] == "ready"
     assert provider.search_flight_offers.call_count == 8
     assert tasks.run_monthly_search.run(key, token)["status"] == "superseded"
     assert provider.search_flight_offers.call_count == 8
@@ -278,6 +316,127 @@ async def test_history_failure_retries_saved_quotes_without_provider_calls(monke
     await analyzer.get_monthly_cheapest_dates(request.year, request.month, **params)
     with SessionLocal() as session:
         assert len(session.scalars(select(PriceObservation)).all()) == 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expiry", ["ttl", "day"])
+async def test_expired_checkpoint_preserves_unsaved_observations(monkeypatch, expiry):
+    request = search_request(adults=2, duration_days=5, currency="USD", non_stop=True)
+    departure = date(request.year, request.month, 1)
+    observed = datetime.now(timezone.utc) - timedelta(hours=2)
+    quote = {
+        "success": True,
+        "data": [{"id": "captured", "price": {"currency": "USD", "total": "100"}}],
+        "meta": {
+            "source": "amadeus",
+            "observed_at": observed.isoformat(),
+            "history_saved": False,
+        },
+    }
+    progress = {
+        "day": (date.today() - timedelta(days=expiry == "day")).isoformat(),
+        "started_at": (
+            observed if expiry == "ttl" else datetime.now(timezone.utc)
+        ).isoformat(),
+        "dates": [departure.isoformat()],
+        "quotes": {f"NRT:{departure.isoformat()}": quote},
+    }
+    captured = deepcopy(progress)
+    history = PriceHistoryService()
+    persist = Mock(wraps=history.record_offers, side_effect=RuntimeError("offline"))
+    history.record_offers = persist
+    client = Mock()
+    client.shopping.flight_offers_search.get.return_value = SimpleNamespace(
+        data=[], dictionaries={}
+    )
+    monkeypatch.setattr(settings, "AMADEUS_HOSTNAME", "production")
+    provider = AmadeusService(client=client, history_service=history)
+    analyzer = MonthlyPriceAnalyzer(amadeus_service=provider)
+    monkeypatch.setattr(analyzer, "_get_search_dates", lambda *_: [departure])
+    snapshots = []
+    save = AsyncMock(
+        side_effect=lambda checkpoint: snapshots.append(deepcopy(checkpoint))
+    )
+    heartbeat = AsyncMock()
+    params = dict(
+        origin=request.origin,
+        adults=request.adults,
+        trip_duration=request.duration_days,
+        currency=request.currency,
+        non_stop=request.non_stop,
+        force_refresh=True,
+        progress=progress,
+        save_progress=save,
+        heartbeat=heartbeat,
+    )
+    with pytest.raises(RuntimeError, match="history"):
+        await analyzer.get_monthly_cheapest_dates(request.year, request.month, **params)
+    assert progress == captured
+    client.shopping.flight_offers_search.get.assert_not_called()
+    persist.side_effect = None
+    await analyzer.get_monthly_cheapest_dates(request.year, request.month, **params)
+    with SessionLocal() as session:
+        rows = session.scalars(select(PriceObservation)).all()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.observed_at == observed.replace(tzinfo=None)
+        assert row.origin == request.origin and row.destination == "NRT"
+        assert row.adults == 2 and row.search_conditions["non_stop"] is True
+        assert row.return_date == departure + timedelta(days=4)
+    assert client.shopping.flight_offers_search.get.call_count == 7
+    assert any(
+        snapshot["quotes"]
+        .get(f"NRT:{departure.isoformat()}", {})
+        .get("meta", {})
+        .get("history_saved")
+        for snapshot in snapshots
+    )
+    heartbeat.assert_awaited()
+
+
+def test_worker_recovers_history_before_rejecting_past_month(store, monkeypatch):
+    service, _, enqueue = store
+    service.source = "amadeus"
+    request = search_request(currency="USD")
+    service.request(request)
+    key, token = enqueue.call_args.args
+    past = date.today().replace(day=1) - timedelta(days=1)
+    with SessionLocal() as session:
+        row = session.get(MonthlySearch, key)
+        row.request = {**request.model_dump(), "year": past.year, "month": past.month}
+        row.checkpoint = {
+            "quotes": {
+                f"NRT:{past.isoformat()}": {
+                    "success": True,
+                    "data": [
+                        {"id": "old", "price": {"currency": "USD", "total": "100"}}
+                    ],
+                    "meta": {
+                        "source": "amadeus",
+                        "history_saved": False,
+                        "observed_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                }
+            }
+        }
+        session.commit()
+    monkeypatch.setattr(settings, "AMADEUS_HOSTNAME", "production")
+    client = Mock()
+    analyzer = MonthlyPriceAnalyzer(amadeus_service=AmadeusService(client=client))
+    monkeypatch.setattr(tasks, "MonthlySearchService", lambda: service)
+    monkeypatch.setattr(tasks, "MonthlyPriceAnalyzer", lambda: analyzer)
+    monkeypatch.setattr(tasks, "configured_source", lambda: "amadeus")
+    with pytest.raises(ValueError, match="과거 월"):
+        tasks.run_monthly_search.run(key, token)
+    client.shopping.flight_offers_search.get.assert_not_called()
+    with SessionLocal() as session:
+        observations = session.scalars(select(PriceObservation)).all()
+        assert len(observations) == 1 and observations[0].departure_date == past
+        row = session.get(MonthlySearch, key)
+        assert row.status == "failed"
+        assert row.checkpoint["quotes"][f"NRT:{past.isoformat()}"]["meta"][
+            "history_saved"
+        ]
 
 
 def test_terminal_worker_failure_keeps_last_result(store, monkeypatch):

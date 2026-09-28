@@ -20,6 +20,7 @@ from alembic.config import Config
 from app.config.settings import settings
 from app.core.database import Base
 from app.models.flight_requests import MonthlySearchRequest
+from app.services.amadeus_service import AmadeusService
 from app.services.monthly_search_service import MonthlySearchService
 from app.services.provider_http import ProviderHTTP
 from app.tasks import monthly_data_collection as tasks
@@ -126,12 +127,29 @@ def test_shared_redis_provider_budget_across_clients(redis_url, monkeypatch):
             client.close()
 
 
+@pytest.mark.parametrize("retry_once", [False, True])
 def test_real_broker_worker_publishes_durable_result(
-    pg_sessions, redis_url, monkeypatch
+    pg_sessions, redis_url, monkeypatch, retry_once
 ):
     monkeypatch.setattr(settings, "ENABLE_DUMMY_FALLBACK", True)
     store = MonthlySearchService(pg_sessions, source="demo")
     monkeypatch.setattr(tasks, "MonthlySearchService", lambda: store)
+    search = AmadeusService.search_flight_offers
+    retry = tasks.run_monthly_search.retry
+    calls, retry_delays = [], []
+
+    async def fail_once(self, **conditions):
+        calls.append(conditions)
+        if retry_once and len(calls) == 1:
+            return {"success": False, "data": []}
+        return await search(self, **conditions)
+
+    def retry_immediately(**kwargs):
+        retry_delays.append(kwargs["countdown"])
+        return retry(**{**kwargs, "countdown": 0})
+
+    monkeypatch.setattr(AmadeusService, "search_flight_offers", fail_once)
+    monkeypatch.setattr(tasks.run_monthly_search, "retry", retry_immediately)
     old_broker, old_transport = (
         celery_app.conf.broker_url,
         celery_app.conf.broker_transport_options,
@@ -171,6 +189,11 @@ def test_real_broker_worker_publishes_durable_result(
                 and response["data"]["duration_days"] == 5
             )
             assert response["data"]["non_stop"] and response["data"]["is_demo"]
+            assert retry_delays == ([60] if retry_once else [])
+            assert (
+                response["data"]["job_id"] != pending["data"]["job_id"]
+            ) == retry_once
+            assert len(calls) == response["data"]["total_searches"] + int(retry_once)
     finally:
         celery_app.conf.broker_url = old_broker
         celery_app.conf.broker_transport_options = old_transport

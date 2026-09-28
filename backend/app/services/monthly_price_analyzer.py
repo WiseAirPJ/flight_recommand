@@ -31,6 +31,35 @@ class MonthlyPriceAnalyzer:
             first += timedelta(days=settings.MONTHLY_SAMPLE_STEP)
         return dates
 
+    async def save_pending_history(
+        self, payload, progress, save_progress, heartbeat=None
+    ):
+        """Persist captured observations even when their travel dates have passed."""
+        if self.amadeus_service.source != "amadeus":
+            return
+        for key, quote in progress.get("quotes", {}).items():
+            if not quote.get("data") or quote.get("meta", {}).get("history_saved"):
+                continue
+            if heartbeat:
+                await heartbeat()
+            destination, departure = key.split(":", 1)
+            return_date = date.fromisoformat(departure) + timedelta(
+                days=payload["duration_days"] - 1
+            )
+            await self.amadeus_service.save_history(
+                quote,
+                origin=payload["origin"],
+                destination=destination,
+                departure_date=departure,
+                return_date=return_date.isoformat(),
+                adults=payload["adults"],
+                currency=payload["currency"],
+                non_stop=payload["non_stop"],
+            )
+            if not quote.get("meta", {}).get("history_saved"):
+                raise RuntimeError("Captured price history persistence incomplete")
+            await save_progress(progress)
+
     async def get_monthly_cheapest_dates(
         self,
         target_year,
@@ -74,6 +103,9 @@ class MonthlyPriceAnalyzer:
                 >= settings.MONTHLY_CACHE_TTL
             )
             if progress.get("day") != date.today().isoformat() or expired:
+                await self.save_pending_history(
+                    request.model_dump(), progress, save_progress, heartbeat
+                )
                 progress.clear()
                 progress.update(
                     day=date.today().isoformat(), started_at=now.isoformat(), quotes={}

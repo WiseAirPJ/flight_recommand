@@ -22,7 +22,6 @@ def run_monthly_search(self, key, token):
     try:
         if source != configured_source():
             raise ValueError("Worker and API provider settings differ")
-        request = MonthlySearchRequest(**payload)
         analyzer = MonthlyPriceAnalyzer()
 
         async def collect():
@@ -32,6 +31,10 @@ def run_monthly_search(self, key, token):
             async def heartbeat():
                 await asyncio.to_thread(store.heartbeat, key, token)
 
+            # A queued retry can cross a month boundary. Recover observations
+            # before validation rejects a now-past search month.
+            await analyzer.save_pending_history(payload, progress, save, heartbeat)
+            request = MonthlySearchRequest(**payload)
             return await analyzer.get_monthly_cheapest_dates(
                 request.year,
                 request.month,
@@ -60,10 +63,10 @@ def run_monthly_search(self, key, token):
             raise
         delay = 60 * (2**self.request.retries)
         try:
-            store.retry(key, token, delay)
+            next_token = store.retry(key, token, delay)
         except LeaseLost:
             return {"status": "superseded"}
-        raise self.retry(exc=exc, countdown=delay)
+        raise self.retry(args=[key, next_token], exc=exc, countdown=delay)
 
 
 @celery_app.task
