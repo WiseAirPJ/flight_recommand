@@ -24,6 +24,9 @@ celery_app.conf.update(
     # 타임존 설정
     timezone="Asia/Seoul",
     enable_utc=True,
+    broker_connection_timeout=2,
+    broker_transport_options={"socket_connect_timeout": 2, "socket_timeout": 2},
+    task_publish_retry=False,
     # 작업 설정
     task_serializer="json",
     accept_content=["json"],

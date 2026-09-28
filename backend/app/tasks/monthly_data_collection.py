@@ -1,29 +1,88 @@
-"""Every worker task is registered on one Celery application."""
+"""All monthly collection entry points share durable job deduplication."""
 
+import asyncio
 from datetime import date, timedelta
 
 from app.config.settings import settings
-from app.services.monthly_data_collection_service import MonthlyDataCollectionService
+from app.models.flight_requests import MonthlySearchRequest
+from app.services.cache_admin_service import CacheAdminService
+from app.services.monthly_price_analyzer import MonthlyPriceAnalyzer
+from app.services.monthly_search_service import LeaseLost, MonthlySearchService
+from app.services.provider_source import configured_source
 from app.tasks.celery_app import celery_app
 
 
-@celery_app.task(
-    autoretry_for=(RuntimeError,), retry_backoff=60, retry_kwargs={"max_retries": 3}
-)
+@celery_app.task(bind=True, max_retries=3)
+def run_monthly_search(self, key, token):
+    store = MonthlySearchService()
+    claimed = store.claim(key, token)
+    if claimed is None:
+        return {"status": "superseded"}
+    payload, source, progress = claimed
+    try:
+        if source != configured_source():
+            raise ValueError("Worker and API provider settings differ")
+        request = MonthlySearchRequest(**payload)
+        analyzer = MonthlyPriceAnalyzer()
+
+        async def collect():
+            async def save(checkpoint):
+                await asyncio.to_thread(store.checkpoint, key, token, checkpoint)
+
+            async def heartbeat():
+                await asyncio.to_thread(store.heartbeat, key, token)
+
+            return await analyzer.get_monthly_cheapest_dates(
+                request.year,
+                request.month,
+                origin=request.origin,
+                trip_duration=request.duration_days,
+                adults=request.adults,
+                currency=request.currency,
+                non_stop=request.non_stop,
+                force_refresh=True,
+                progress=progress,
+                save_progress=save,
+                heartbeat=heartbeat,
+            )
+
+        result = asyncio.run(collect())
+        if not result["success"] or result["data"].get("partial"):
+            raise RuntimeError("Search or observation persistence incomplete")
+        result["data"]["cache_saved"] = True  # durable result, independent of Redis TTL
+        store.complete(key, token, result)
+        return {"status": "ready", "job_id": token}
+    except LeaseLost:
+        return {"status": "superseded"}
+    except Exception as exc:
+        if self.request.retries >= self.max_retries or isinstance(exc, ValueError):
+            store.fail(key, token, "수집에 실패했습니다. 잠시 후 다시 조회해 주세요.")
+            raise
+        delay = 60 * (2**self.request.retries)
+        try:
+            store.retry(key, token, delay)
+        except LeaseLost:
+            return {"status": "superseded"}
+        raise self.retry(exc=exc, countdown=delay)
+
+
+@celery_app.task
 def collect_monthly_cheapest_data(year, month, origin="ICN"):
-    result = MonthlyDataCollectionService().collect_monthly_data_sync(
-        year, month, origin
-    )
-    if not result["success"] or result["data"].get("partial"):
-        raise RuntimeError(result["message"])
-    return result
+    """Compatibility task: schedule through the same deduplicated job path."""
+    request = MonthlySearchRequest(year=year, month=month, origin=origin)
+    return MonthlySearchService().request(request, force_refresh=True)
 
 
 def _enqueue(year, month):
-    return [
-        collect_monthly_cheapest_data.delay(year, month, origin).id
+    store = MonthlySearchService()
+    results = [
+        store.request(
+            MonthlySearchRequest(year=year, month=month, origin=origin),
+            force_refresh=True,
+        )
         for origin in settings.COLLECTION_ORIGINS
     ]
+    return [result.get("data", {}).get("job_id") for result in results]
 
 
 @celery_app.task
@@ -50,19 +109,16 @@ def collect_popular_months_data():
 
 @celery_app.task
 def cleanup_expired_cache():
-    return MonthlyDataCollectionService().cleanup_expired_cache()
+    return CacheAdminService().cleanup_expired_cache()
 
 
 @celery_app.task
 def update_cache_statistics():
-    return MonthlyDataCollectionService().get_collection_statistics()
-
-
-def is_month_data_available(year, month, origin="ICN"):
-    return MonthlyDataCollectionService().is_month_data_available(year, month, origin)
+    return CacheAdminService().get_cache_statistics()
 
 
 def trigger_month_collection_if_needed(year, month, origin="ICN"):
-    if is_month_data_available(year, month, origin):
-        return "already_exists"
-    return collect_monthly_cheapest_data.delay(year, month, origin).id
+    result = MonthlySearchService().request(
+        MonthlySearchRequest(year=year, month=month, origin=origin)
+    )
+    return result.get("data", {}).get("job_id")
