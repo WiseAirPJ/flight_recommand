@@ -79,10 +79,9 @@ class MonthlySearchService:
                 # Only the owner of this version can claim it. A concurrent caller
                 # will observe its pending token and return the same job.
                 old_token = row.token
-                resume = (
-                    row.status != "ready"
-                    and row.checkpoint.get("day") == date.today().isoformat()
-                )
+                # Old quotes may still contain unsaved observations. The worker
+                # persists those before discarding expired search progress.
+                resume = row.status != "ready"
                 claimed = session.execute(
                     update(MonthlySearch)
                     .where(
