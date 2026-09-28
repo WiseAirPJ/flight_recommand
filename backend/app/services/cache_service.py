@@ -333,7 +333,7 @@ class CacheService:
                 sample_value = self.redis_client.get(sample_key)
                 if sample_value:
                     sample_data[sample_key] = json.loads(sample_value)
-            except (json.JSONDecodeError, Exception):
+            except json.JSONDecodeError, Exception:
                 sample_data[sample_key] = "데이터 파싱 실패"
 
         return {
@@ -382,7 +382,7 @@ class CacheService:
                     expires_at = datetime.fromisoformat(value["expires_at"])
                     if current_time > expires_at:
                         expired_keys.append(key)
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     expired_keys.append(key)
 
         for key in expired_keys:
@@ -414,7 +414,7 @@ class CacheService:
                             self.redis_client.delete(key)
                             cleaned_count += 1
 
-            except (json.JSONDecodeError, ValueError, TypeError):
+            except json.JSONDecodeError, ValueError, TypeError:
                 self.redis_client.delete(key)
                 cleaned_count += 1
 

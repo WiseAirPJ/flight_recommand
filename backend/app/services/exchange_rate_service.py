@@ -104,7 +104,7 @@ class ExchangeRateService:
             if currency_codes:
                 rates = [rate for rate in rates if rate.currency_code in currency_codes]
             return ExchangeRateResponse(bool(rates), rates, now)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return ExchangeRateResponse(
                 False,
                 [],
@@ -218,7 +218,7 @@ class ExchangeRateService:
                         or datetime.now().strftime("%Y%m%d"),
                     )
                 )
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 continue
         return rates
 

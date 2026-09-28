@@ -72,7 +72,7 @@ def enhance_cheapest_dates_response(
             try:
                 price = float(item.get("price", {}).get("total", 0))
                 prices.append(price)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 continue
 
         if prices:
