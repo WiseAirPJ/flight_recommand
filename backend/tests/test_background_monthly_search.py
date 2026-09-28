@@ -175,6 +175,24 @@ def test_policy_and_search_conditions_have_distinct_jobs(store, monkeypatch):
     assert enqueue.call_count == 8
 
 
+def test_retry_rejects_previous_delivery_and_owner(store):
+    service, _, enqueue = store
+    service.request(search_request())
+    key, old_token = enqueue.call_args.args
+    service.claim(key, old_token)
+    new_token = service.retry(key, old_token, delay=60)
+    assert service.claim(key, old_token) is None
+    assert new_token and new_token != old_token
+    assert service.claim(key, new_token) is not None
+    with pytest.raises(LeaseLost):
+        service.heartbeat(key, old_token)
+    with pytest.raises(LeaseLost):
+        service.complete(key, old_token, result_for(search_request()))
+    service.fail(key, old_token, "late failure")
+    service.complete(key, new_token, result_for(search_request()))
+    assert service.request(search_request())["data"]["status"] == "ready"
+
+
 def test_map_cold_response_is_202_without_calling_provider(store, monkeypatch):
     service, _, enqueue = store
     provider = AsyncMock(side_effect=AssertionError("API must not collect quotes"))
@@ -230,7 +248,10 @@ def test_worker_retries_only_failed_quote_and_fences_duplicate_delivery(
     with SessionLocal() as session:
         row = session.get(MonthlySearch, key)
         assert row.status == "pending" and len(row.checkpoint["quotes"]) == 6
-    assert tasks.run_monthly_search.run(key, token)["status"] == "ready"
+    retry_args = tasks.run_monthly_search.retry.call_args.kwargs["args"]
+    assert retry_args[0] == key and retry_args[1] != token
+    assert tasks.run_monthly_search.run(key, token)["status"] == "superseded"
+    assert tasks.run_monthly_search.run(*retry_args)["status"] == "ready"
     assert provider.search_flight_offers.call_count == 8
     assert tasks.run_monthly_search.run(key, token)["status"] == "superseded"
     assert provider.search_flight_offers.call_count == 8

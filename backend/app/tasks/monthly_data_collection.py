@@ -60,10 +60,10 @@ def run_monthly_search(self, key, token):
             raise
         delay = 60 * (2**self.request.retries)
         try:
-            store.retry(key, token, delay)
+            next_token = store.retry(key, token, delay)
         except LeaseLost:
             return {"status": "superseded"}
-        raise self.retry(exc=exc, countdown=delay)
+        raise self.retry(args=[key, next_token], exc=exc, countdown=delay)
 
 
 @celery_app.task
