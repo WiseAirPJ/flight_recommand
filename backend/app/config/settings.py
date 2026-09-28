@@ -43,6 +43,9 @@ class Settings(BaseSettings):
         "YNY",
     ]
     MONTHLY_SAMPLE_STEP: int = Field(3, ge=1, le=7)
+    MONTHLY_STALE_TTL: int = Field(604800, ge=3600)
+    MONTHLY_JOB_LEASE_SECONDS: int = Field(180, ge=120)
+    AMADEUS_REQUESTS_PER_SECOND: int = Field(5, ge=1, le=20)
     MONTHLY_CACHE_TTL: int = Field(3600, ge=60)
 
     AMADEUS_CLIENT_ID: Optional[str] = None
@@ -75,11 +78,23 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_runtime(self):
+        if self.MONTHLY_STALE_TTL < self.MONTHLY_CACHE_TTL:
+            raise ValueError(
+                "마지막 성공 결과 보관 기간은 갱신 간격 이상이어야 합니다."
+            )
         if self.USE_REAL_AMADEUS and not (
             self.AMADEUS_CLIENT_ID and self.AMADEUS_CLIENT_SECRET
         ):
             raise ValueError("실제 검색에는 Amadeus API 키가 필요합니다.")
         if self.is_production:
+            if not self.DATABASE_URL.startswith(
+                ("postgresql://", "postgresql+psycopg2://")
+            ):
+                raise ValueError(
+                    "운영 수집 조정에는 공유 PostgreSQL 데이터베이스가 필요합니다."
+                )
+            if self.USE_REAL_AMADEUS and not (self.REDIS_URL or self.REDIS_HOST):
+                raise ValueError("운영 공급자 호출량 제한에는 공유 Redis가 필요합니다.")
             if "SECRET_KEY" not in self.model_fields_set:
                 raise ValueError("운영 환경의 SECRET_KEY를 설정하세요.")
             if self.ENABLE_DUMMY_FALLBACK:

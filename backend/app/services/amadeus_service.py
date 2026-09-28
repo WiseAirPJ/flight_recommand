@@ -11,6 +11,8 @@ from amadeus import Client, ResponseError
 from app.config.settings import settings
 from app.services.exchange_rate_service import ExchangeRateService
 from app.services.price_history_service import PriceHistoryService
+from app.services.provider_http import ProviderHTTP
+from app.services.provider_source import configured_source
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,7 @@ class AmadeusService:
                 client_id=settings.AMADEUS_CLIENT_ID,
                 client_secret=settings.AMADEUS_CLIENT_SECRET,
                 hostname=settings.AMADEUS_HOSTNAME,
+                http=ProviderHTTP(),
             )
         self.is_active = self.client is not None
         self.exchange_rate_service = exchange_rate_service or ExchangeRateService()
@@ -30,13 +33,7 @@ class AmadeusService:
 
     @property
     def source(self):
-        if self.is_active:
-            return (
-                "amadeus"
-                if settings.AMADEUS_HOSTNAME == "production"
-                else "amadeus_test"
-            )
-        return "demo" if settings.ENABLE_DUMMY_FALLBACK else "unavailable"
+        return configured_source(self.is_active)
 
     async def search_flight_offers(
         self,
@@ -94,38 +91,30 @@ class AmadeusService:
                 offers = await self._convert_prices_to_krw(offers, "JPY")
             if any(o.get("price", {}).get("currency") != currency for o in offers):
                 raise ValueError("요청한 통화와 검색 결과의 통화가 다릅니다.")
-            history_saved = False
-            try:
-                saved_count = await asyncio.to_thread(
-                    self.history_service.record_offers,
-                    offers,
-                    origin=origin,
-                    destination=destination,
-                    departure_date=departure_date,
-                    return_date=return_date,
-                    adults=adults,
-                    currency=currency,
-                    source=self.source,
-                    non_stop=non_stop,
-                    observed_at=datetime.fromisoformat(timestamp),
-                )
-                history_saved = saved_count > 0
-            except Exception:
-                history_saved = False
-                logger.exception("가격 이력 저장 실패")
-            return {
+            result = {
                 "success": True,
                 "data": offers,
                 "meta": {
                     "source": self.source,
                     "is_demo": False,
                     "observed_at": timestamp,
-                    "history_saved": history_saved,
+                    "history_saved": False,
                     "display_price_is_estimate": currency == "KRW",
                     "price_basis": "total_for_all_adults",
                 },
                 "dictionaries": getattr(response, "dictionaries", {}),
             }
+            await self.save_history(
+                result,
+                origin=origin,
+                destination=destination,
+                departure_date=departure_date,
+                return_date=return_date,
+                adults=adults,
+                currency=currency,
+                non_stop=non_stop,
+            )
+            return result
         except ResponseError:
             logger.exception("Amadeus 검색 실패")
             return {
@@ -142,6 +131,28 @@ class AmadeusService:
                 "status_code": 502,
                 "message": "항공권 가격을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.",
             }
+
+    async def save_history(self, result, **conditions):
+        """Retry persistence from a captured quote without calling the provider."""
+        meta = result.get("meta", {})
+        if (
+            meta.get("source") != "amadeus"
+            or not result.get("data")
+            or meta.get("history_saved")
+        ):
+            return
+        try:
+            count = await asyncio.to_thread(
+                self.history_service.record_offers,
+                result["data"],
+                **conditions,
+                source="amadeus",
+                observed_at=datetime.fromisoformat(meta["observed_at"]),
+            )
+            meta["history_saved"] = count == len(result["data"])
+        except Exception:
+            meta["history_saved"] = False
+            logger.exception("가격 이력 저장 실패")
 
     async def search_cheapest_dates(
         self,
