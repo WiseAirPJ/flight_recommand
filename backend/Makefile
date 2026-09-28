@@ -2,7 +2,7 @@
 UV ?= uv
 RUN = $(UV) run --locked
 SOURCES = app tests conftest.py alembic
-CORE_COVERAGE = app/main.py,app/api/v1/flights.py,app/api/v1/regions.py,app/config/settings.py,app/core/database.py,app/models/flight_requests.py,app/services/amadeus_service.py,app/services/exchange_rate_service.py,app/services/monthly_price_analyzer.py,app/services/monthly_data_collection_service.py,app/services/price_history_service.py,app/tasks/monthly_data_collection.py,app/utils/cache_keys.py,app/utils/decorators.py,app/utils/response_enhancers.py
+CORE_COVERAGE = app/main.py,app/api/v1/flights.py,app/api/v1/regions.py,app/config/settings.py,app/core/database.py,app/models/flight_requests.py,app/services/amadeus_service.py,app/services/exchange_rate_service.py,app/services/monthly_price_analyzer.py,app/services/monthly_search_service.py,app/services/provider_http.py,app/services/provider_source.py,app/services/price_history_service.py,app/tasks/monthly_data_collection.py,app/utils/cache_keys.py,app/utils/decorators.py,app/utils/response_enhancers.py
 
 .PHONY: help install install-dev setup-dev dev worker beat migrate format lint test test-cov coverage-check check ci lock export-requirements pre-commit install-pre-commit typecheck security
 
