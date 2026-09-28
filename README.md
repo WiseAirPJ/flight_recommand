@@ -4,7 +4,7 @@
 
 ## 실행
 
-Python 3.12와 uv 0.12.19를 사용합니다. [uv 공식 설치 안내](https://docs.astral.sh/uv/getting-started/installation/)에 따라 준비합니다. standalone uv를 이미 설치했다면 `uv self update 0.12.19`로 버전을 맞출 수 있습니다. 저장소 루트에서:
+Python 3.14와 uv 0.12.19를 사용합니다. [uv 공식 설치 안내](https://docs.astral.sh/uv/getting-started/installation/)에 따라 준비합니다. standalone uv를 이미 설치했다면 `uv self update 0.12.19`로 버전을 맞출 수 있습니다. 저장소 루트에서:
 
 ```sh
 cd backend

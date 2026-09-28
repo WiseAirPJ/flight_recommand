@@ -1,8 +1,10 @@
 # 개발 환경
 
-Python 3.12, uv 0.12.19를 사용합니다. `.python-version`은 Python 계열을 지정하고 `pyproject.toml`의 `required-version`은 uv 버전을 지정합니다. 현재 검증 범위는 Python 3.12입니다.
+Python 3.14, uv 0.12.19를 사용합니다. `.python-version`은 Python 계열을 지정하고 `pyproject.toml`의 `required-version`은 uv 버전을 지정합니다. 현재 검증 범위는 Python 3.14입니다.
 
 uv 설치는 [공식 안내](https://docs.astral.sh/uv/getting-started/installation/)를 따릅니다. standalone 설치라면 `uv self update 0.12.19`로 버전을 맞출 수 있고, 다른 설치 방식은 해당 패키지 관리자를 사용합니다.
+
+Python 3.14를 기준으로 삼습니다. 3.12에 머물러야 하는 제품 제약은 없으며, [Python 공식 지원 현황](https://devguide.python.org/versions/)에서 3.14는 버그 수정 지원 단계입니다. 기존 고정 버전의 pydantic-core, psycopg2-binary, aiohttp는 3.14 설치용 wheel이 없어 관련 패키지도 함께 갱신했습니다.
 
 모든 명령은 `backend/`에서 실행합니다.
 
@@ -46,7 +48,7 @@ uv sync --locked
 make check
 ```
 
-고정한 직접 의존성의 버전을 변경하려면 `uv add '패키지명==새버전'`처럼 선언도 갱신합니다. 기본 `uv lock`은 기존 잠금 버전을 우선 유지합니다. 저장소의 기존 애플리케이션 버전 제약은 이번 전환에서 유지했습니다.
+고정한 직접 의존성의 버전을 변경하려면 `uv add '패키지명==새버전'`처럼 선언도 갱신합니다. 기본 `uv lock`은 기존 잠금 버전을 우선 유지합니다. Python 3.14 지원에 맞춰 FastAPI·Pydantic·SQLAlchemy·PostgreSQL 드라이버·aiohttp·Celery와 테스트/형식 도구를 갱신했습니다. 잠금 파일 변경은 전체 테스트와 운영 환경 설치로 검증합니다.
 
 pip 입력만 받는 외부 도구에는 `make export-requirements`로 `dist/requirements.txt`를 생성합니다. 이 파일은 배포용 파생 산출물이며 직접 수정하거나 커밋하지 않습니다.
 

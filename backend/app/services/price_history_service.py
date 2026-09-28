@@ -33,7 +33,7 @@ class PriceHistoryService:
             price = offer.get("price", {})
             try:
                 amount = Decimal(str(price["total"]))
-            except (KeyError, InvalidOperation):
+            except KeyError, InvalidOperation:
                 continue
             if (
                 not amount.is_finite()
