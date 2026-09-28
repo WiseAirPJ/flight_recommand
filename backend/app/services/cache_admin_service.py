@@ -5,7 +5,6 @@ These synchronous operations run in FastAPI's worker thread pool or Celery worke
 
 import json
 import logging
-import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -40,7 +39,7 @@ class CacheAdminService:
             return {
                 "cache_type": "memory",
                 "status": "degraded",
-                "total_keys": len(self.cache.memory_snapshot()),
+                "total_keys": len(self.cache.memory_summary()["keys"]),
                 "message": "Redis 연결 불가, 메모리 캐시 사용 중",
             }
 
@@ -114,7 +113,7 @@ class CacheAdminService:
     def _get_app_cache_keys(self) -> List[str]:
         """애플리케이션 관련 캐시 키들만 조회"""
         if not self.is_connected:
-            return list(self.cache.memory_snapshot())
+            return self.cache.memory_summary()["keys"]
 
         patterns = [
             "monthly_cheapest:*",
@@ -151,7 +150,7 @@ class CacheAdminService:
         if not self.is_connected:
             return {
                 "cache_type": "memory",
-                "total_keys": len(self.cache.memory_snapshot()),
+                "total_keys": len(self.cache.memory_summary()["keys"]),
                 "hit_rate": "N/A",
                 "message": "메모리 캐시 사용 중",
             }
@@ -196,7 +195,7 @@ class CacheAdminService:
         self, pattern: Optional[str], limit: int
     ) -> Dict[str, Any]:
         """메모리 캐시에서 키 조회"""
-        keys = list(self.cache.memory_snapshot())
+        keys = self.cache.memory_summary()["keys"]
         if pattern:
             import fnmatch
 
@@ -264,13 +263,14 @@ class CacheAdminService:
     def get_memory_usage(self) -> Dict[str, Any]:
         """메모리 사용량 상세 조회"""
         if not self.is_connected:
-            snapshot = self.cache.memory_snapshot()
-            memory_size = sys.getsizeof(snapshot)
+            summary = self.cache.memory_summary()
+            total_keys = len(summary["keys"])
+            memory_size = summary["size_bytes"]
             return {
                 "cache_type": "memory",
                 "total_size_bytes": memory_size,
-                "total_keys": len(snapshot),
-                "avg_size_per_key": (memory_size / len(snapshot) if snapshot else 0),
+                "total_keys": total_keys,
+                "avg_size_per_key": (memory_size / total_keys if total_keys else 0),
             }
 
         try:
@@ -445,7 +445,7 @@ class CacheAdminService:
             health_info.update(
                 {
                     "cache_type": "memory_fallback",
-                    "memory_keys": len(self.cache.memory_snapshot()),
+                    "memory_keys": len(self.cache.memory_summary()["keys"]),
                 }
             )
 

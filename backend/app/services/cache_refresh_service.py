@@ -16,16 +16,6 @@ class CacheRefreshService:
     def __init__(self, cache_service=None):
         self.cache = cache_service if cache_service is not None else CacheService()
 
-    def _import_celery_task(self):
-        """Celery 태스크 모듈 임포트"""
-        try:
-            from app.tasks.monthly_data_collection import collect_monthly_cheapest_data
-
-            return collect_monthly_cheapest_data
-        except ImportError as e:
-            logger.warning(f"Celery 태스크 모듈 로드 실패: {str(e)}")
-            return None
-
     def _get_months_to_refresh(self, months_ahead=2):
         today = datetime.now().date()
         months = []
@@ -34,9 +24,6 @@ class CacheRefreshService:
             months.append((year, month + 1))
         return months
 
-    def _should_refresh_cache(self, cache_key, force_update):
-        return force_update or not self.cache.is_cache_valid(cache_key)
-
     def refresh_cache(
         self,
         regions: Optional[List[str]] = None,
@@ -44,15 +31,9 @@ class CacheRefreshService:
         origin: str = "ICN",
     ) -> Dict[str, Any]:
         """캐시 데이터 갱신"""
-        collect_monthly_cheapest_data = self._import_celery_task()
-        if not collect_monthly_cheapest_data:
-            return {
-                "success": False,
-                "message": "백그라운드 태스크 시스템을 사용할 수 없습니다",
-                "data": {"error": "celery_unavailable"},
-            }
-
         try:
+            from app.tasks.monthly_data_collection import collect_monthly_cheapest_data
+
             refresh_info = {
                 "started_at": datetime.now().isoformat(),
                 "origin": origin,
@@ -71,7 +52,7 @@ class CacheRefreshService:
                     source,
                 )
 
-                if self._should_refresh_cache(cache_key, force_update):
+                if force_update or not self.cache.is_cache_valid(cache_key):
                     task = collect_monthly_cheapest_data.delay(year, month, origin)
                     refresh_info["tasks_created"].append(
                         {
@@ -101,15 +82,9 @@ class CacheRefreshService:
         self, regions: Optional[List[str]] = None, months_ahead: int = 3
     ) -> Dict[str, Any]:
         """캐시 워밍업"""
-        collect_monthly_cheapest_data = self._import_celery_task()
-        if collect_monthly_cheapest_data is None:
-            return {
-                "success": False,
-                "message": "백그라운드 태스크 시스템을 사용할 수 없습니다",
-                "data": {"error": "celery_unavailable"},
-            }
-
         try:
+            from app.tasks.monthly_data_collection import collect_monthly_cheapest_data
+
             warmup_info = {
                 "started_at": datetime.now().isoformat(),
                 "regions": "all",

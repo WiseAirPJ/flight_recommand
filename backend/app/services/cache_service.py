@@ -3,6 +3,7 @@
 import fnmatch
 import json
 import logging
+import sys
 from copy import deepcopy
 from datetime import datetime, timedelta
 from threading import RLock
@@ -68,10 +69,15 @@ class CacheService:
         with self._memory_lock:
             return self._prune_memory()
 
-    def memory_snapshot(self) -> dict:
+    def memory_summary(self) -> dict:
+        """Return only the metadata needed by cache administration."""
         with self._memory_lock:
             self._prune_memory()
-            return deepcopy(self._memory_cache)
+            return {
+                "keys": list(self._memory_cache),
+                # Shallow dictionary size, not the size of all cached payloads.
+                "size_bytes": sys.getsizeof(self._memory_cache),
+            }
 
     def set_cache(self, key: str, value: Any, ttl_seconds: int = 3600) -> bool:
         try:
