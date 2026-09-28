@@ -4,16 +4,17 @@
 
 ## 실행
 
-Python 3.12를 사용합니다. 저장소 루트에서:
+Python 3.12와 uv 0.12.19를 사용합니다. [uv 공식 설치 안내](https://docs.astral.sh/uv/getting-started/installation/)에 따라 준비합니다. standalone uv를 이미 설치했다면 `uv self update 0.12.19`로 버전을 맞출 수 있습니다. 저장소 루트에서:
 
 ```sh
 cd backend
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
+uv python install
+uv sync --locked
 cp ../.env.example .env
-uvicorn app.main:app --reload
+uv run --locked uvicorn app.main:app --reload
 ```
+
+의존성은 `backend/pyproject.toml`에 선언하고 `backend/uv.lock`을 함께 커밋합니다. 개발 의존성은 `dev` 그룹에 있으며 `uv sync --locked`에 기본 포함됩니다. 별도 가상환경 활성화는 필요하지 않습니다. 자세한 명령은 [개발 안내](backend/DEVELOPMENT.md)를 참고하세요.
 
 문서는 `http://localhost:8000/docs`, 상태 확인은 `/health`입니다. 기본값은 외부 항공권 API를 호출하지 않으며, 가격 검색은 공급자 미설정으로 503을 반환합니다. 로컬 예시 화면 개발에는 `.env`에서 `ENABLE_DUMMY_FALLBACK=true`를 설정하세요. 예시 응답은 `is_demo=true`이고 가격 이력에는 저장되지 않습니다.
 
@@ -64,7 +65,7 @@ backend/alembic/                        DB 변경 이력
 개발 환경에서는 시작 시 SQLite 테이블을 생성합니다. 운영 환경에서는 `INIT_DB_ON_STARTUP=false`로 설정하고 새 데이터베이스에 다음을 실행합니다:
 
 ```sh
-alembic upgrade head
+uv run --locked alembic upgrade head
 ```
 
 이미 테이블을 가진 DB에는 백업과 스키마 비교 없이 초기 마이그레이션을 적용하거나 stamp하지 마세요. 이번 초기 마이그레이션은 새 DB 기준입니다. PostgreSQL은 `DATABASE_URL=postgresql+psycopg2://...`로 설정합니다.
@@ -72,8 +73,8 @@ alembic upgrade head
 API와 worker에 동일한 DB·Redis·검색 설정을 제공한 뒤 별도 터미널에서 실행합니다:
 
 ```sh
-celery -A app.tasks.celery_app:celery_app worker -l info -Q monthly_analysis,daily_updates
-celery -A app.tasks.celery_app:celery_app beat -l info
+uv run --locked celery -A app.tasks.celery_app:celery_app worker -l info -Q monthly_analysis,daily_updates
+uv run --locked celery -A app.tasks.celery_app:celery_app beat -l info
 ```
 
 예약 수집은 `COLLECTION_ORIGINS`의 모든 출발공항을 대상으로 합니다. 8개 출발공항 × 7개 도착공항 × 월별 약 10~11개 날짜만으로도 월 한 번 조회에 수백 회 호출이 발생합니다. 공급자 요금·쿼터에 맞게 공항 목록과 샘플 간격을 설정한 뒤 수집기를 실행하세요. 메모리 캐시는 worker와 API 사이에 공유되지 않습니다.
@@ -85,11 +86,9 @@ LLM·예측 코드는 보존하지만 `ENABLE_EXPERIMENTAL_FEATURES=false`가 �
 ## 검증
 
 ```sh
-pytest
-black --check app tests conftest.py alembic
-isort --check-only app tests conftest.py alembic
-flake8 app tests conftest.py alembic --select E9,F63,F7,F82 --show-source
-pytest --cov=app --cov-report=term-missing
+make check
+# 테스트만 실행
+uv run --locked pytest
 ```
 
 CI는 모든 테스트를 실행하고 전체 코드 커버리지를 보고합니다. 통합한 검색·환율·월별 분석·저장·수집 경로에는 80% 커버리지 기준을 실제로 적용합니다. 기존에는 전체 80% 설정이 있었지만 CI에서 pytest 자체를 실행하지 않았습니다. 아직 검증이 부족한 실험·관리 기능까지 전체 80%를 달성했다고 주장하지 않습니다.
@@ -98,4 +97,4 @@ CI는 모든 테스트를 실행하고 전체 코드 커버리지를 보고합�
 
 ## 브랜치 전략
 
-새 기능은 `feat/`, 구조 정리는 `refactor/`, 오류 수정은 `fix/`, 설정·유지보수는 `chore/`를 사용합니다. 현재 통합 브랜치는 `refactor/flight-search-integration`입니다. 기능 브랜치의 이력을 보존해 통합하며, `main` 반영은 검토 후 진행합니다.
+새 기능은 `feat/`, 구조 정리는 `refactor/`, 오류 수정은 `fix/`, 설정·유지보수는 `chore/`를 사용합니다. 기능 브랜치의 이력을 보존해 통합하며, `main` 반영은 검토 후 진행합니다.
