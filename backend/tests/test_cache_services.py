@@ -90,11 +90,14 @@ def test_expired_entry_is_reclaimed_before_live_eviction(timed_cache, monkeypatc
     assert cache.get_cache("third") == 3
 
 
-def test_memory_snapshots_cannot_mutate_cached_values():
+def test_memory_summary_excludes_payloads_and_pattern_delete_is_scoped():
     cache = CacheService()
     cache.set_cache("flight_search:one", [1])
-    snapshot = cache.memory_snapshot()
-    snapshot["flight_search:one"]["data"].append(2)
+    summary = cache.memory_summary()
+    assert set(summary) == {"keys", "size_bytes"}
+    assert summary["keys"] == ["flight_search:one"]
+    summary["keys"].clear()
+    assert cache.memory_summary()["keys"] == ["flight_search:one"]
     assert cache.get_cache("flight_search:one") == [1]
     cache.set_cache("holidays:2026", [])
     assert cache.clear_cache_pattern("flight_search:*") == 1
@@ -111,7 +114,7 @@ def test_shared_memory_is_safe_across_worker_threads():
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(use_cache, range(200)))
-    assert CacheService().memory_snapshot() == {}
+    assert CacheService().memory_summary()["keys"] == []
 
 
 @pytest.mark.parametrize(
