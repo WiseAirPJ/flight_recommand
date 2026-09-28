@@ -35,16 +35,6 @@ class AirportSearchResult(BaseModel):
     is_international: bool = Field(..., description="국제공항 여부")
 
 
-class ExchangeRate(BaseModel):
-    """환율 정보 모델"""
-
-    from_currency: str = Field("KRW", description="기준 통화")
-    to_currency: str = Field("JPY", description="대상 통화")
-    rate: float = Field(..., description="환율", example=0.1089)
-    last_updated: str = Field(..., description="마지막 업데이트")
-    source: str = Field(..., description="데이터 출처")
-
-
 def get_date_service() -> DateService:
     """날짜 서비스 인스턴스 반환"""
     return DateService()
@@ -145,62 +135,6 @@ async def search_airports(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"공항 검색 중 오류가 발생했습니다: {str(e)}")
-
-
-@router.get("/exchange-rate", response_model=Dict[str, Any])
-async def get_exchange_rate(
-    from_currency: str = Query("KRW", description="기준 통화"),
-    to_currency: str = Query("JPY", description="대상 통화"),
-) -> Dict[str, Any]:
-    """
-    환율 정보 조회 (원화-엔화)
-
-    **사용 예시**:
-    - `GET /utils/exchange-rate` → KRW → JPY 기본 환율
-    - `GET /utils/exchange-rate?from_currency=EUR&to_currency=KRW` → EUR → KRW
-
-    **주의**: 현재는 더미 데이터를 제공합니다.
-    실제 운영시에는 실시간 환율 API 연동이 필요합니다.
-    """
-    try:
-        # 현재는 더미 환율 데이터 제공
-        # 실제 운영시에는 외부 환율 API 연동 필요
-        exchange_rates = {
-            ("KRW", "JPY"): 0.1089,  # 1원 = 0.1089엔
-            ("JPY", "KRW"): 9.18,  # 1엔 = 9.18원
-            ("EUR", "KRW"): 1450.0,  # 1유로 = 1450원
-            ("KRW", "EUR"): 0.000689,  # 1원 = 0.000689유로
-            ("EUR", "JPY"): 158.0,  # 1유로 = 158엔
-            ("JPY", "EUR"): 0.00633,  # 1엔 = 0.00633유로
-        }
-
-        rate_key = (from_currency.upper(), to_currency.upper())
-        rate = exchange_rates.get(rate_key)
-
-        if rate is None:
-            available_pairs = [f"{f}->{t}" for f, t in exchange_rates.keys()]
-            raise HTTPException(
-                status_code=404,
-                detail=f"지원하지 않는 통화 쌍입니다. 지원 통화: {', '.join(available_pairs)}",
-            )
-
-        return {
-            "success": True,
-            "message": f"{from_currency} → {to_currency} 환율 조회 완료",
-            "data": {
-                "from_currency": from_currency.upper(),
-                "to_currency": to_currency.upper(),
-                "rate": rate,
-                "last_updated": datetime.now().isoformat(),
-                "source": "dummy_data",
-                "note": "실제 운영시에는 실시간 환율 API 연동 필요",
-            },
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"환율 조회 중 오류가 발생했습니다: {str(e)}")
 
 
 @router.get("/holidays")
@@ -351,7 +285,6 @@ async def utils_health_check() -> Dict[str, Any]:
         "available_endpoints": [
             "date-info",
             "airports/search",
-            "exchange-rate",
             "holidays",
             "seasons",
             "price-trends",

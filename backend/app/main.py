@@ -9,7 +9,6 @@ from fastapi.responses import RedirectResponse
 from app.api.v1.cache import router as cache_router
 from app.api.v1.flights import router as flights_router
 from app.api.v1.llm import router as llm_router
-from app.api.v1.monthly_flights import router as monthly_flights_router
 from app.api.v1.prediction import router as prediction_router
 from app.api.v1.regions import router as regions_router
 from app.api.v1.utils import router as utils_router
@@ -38,9 +37,10 @@ app = FastAPI(
     - `GET /api/v1/regions/{region_id}/airports` - 지역별 공항 목록
 
     #### ✈️ 항공편 검색
-    - `POST /api/v1/flights/search` - 기본 항공편 검색
+    - `POST /api/v1/flights/search` - 기본 항공편 검색 (왕복/편도 모두 지원)
+    - `POST /api/v1/flights/search-oneway` - **편도 항공편 전용 검색**
     - `POST /api/v1/flights/search-by-duration` - **기간별 검색 (3박4일, 4박5일 등)**
-    - `POST /api/v1/flights/cheapest-dates` - 최저가 날짜 검색
+    - `POST /api/v1/flights/cheapest-dates` - 최저가 날짜 검색 (편도/왕복 모두 지원)
 
     #### 🛠️ 유틸리티
     - `GET /api/v1/utils/date-info` - 날짜/공휴일/시즌 정보
@@ -94,8 +94,7 @@ app.include_router(
     prediction_router, prefix="/api/v1/prediction", tags=["Price Prediction"]
 )  # 가격 예측
 
-# 기존 라우터 (호환성 유지)
-app.include_router(monthly_flights_router, prefix="/api/v1")  # 월별 항공편 (regions와 통합됨)
+# 월별 분석 기능은 regions 라우터
 
 logger.info("모든 API 라우터 등록 완료")
 
@@ -134,7 +133,7 @@ async def api_v1_info() -> Dict[str, Any]:
             "utils": "/api/v1/utils",
             "cache": "/api/v1/cache",
             "llm": "/api/v1/llm",
-            "monthly_flights": "/api/v1/monthly-flights",  # 호환성
+            "monthly_analysis": "/api/v1/regions/monthly-analysis",
         },
         "core_features": [
             "지역별 최저가 조회",
@@ -186,6 +185,7 @@ async def health_check() -> Dict[str, Any]:
                 "total_routes": len(app.routes),
                 "core_apis": [
                     "/api/v1/regions/lowest-prices",
+                    "/api/v1/flights/search-oneway",
                     "/api/v1/flights/search-by-duration",
                     "/api/v1/utils/date-info",
                     "/api/v1/cache/status",

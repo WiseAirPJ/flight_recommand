@@ -7,6 +7,7 @@ from app.models.flight_requests import (
     CheapestDateRequest,
     FlightDurationSearchRequest,
     FlightSearchRequest,
+    OneWayFlightSearchRequest,
 )
 from app.services.amadeus_service import AmadeusService
 from app.services.cache_service import CacheService
@@ -68,6 +69,43 @@ async def search_flights(
     }
 
 
+@router.post("/search-oneway")
+@handle_exceptions("편도 항공편 검색 중 오류가 발생했습니다")
+@cached_response(flight_search_key, ttl_seconds=900)
+@enhance_response(enhance_flight_search_response)
+async def search_oneway_flights(
+    request: OneWayFlightSearchRequest,
+    amadeus_service: AmadeusService = Depends(get_amadeus_service),
+    cache_service: CacheService = Depends(get_cache_service),
+) -> Dict[str, Any]:
+    """
+    편도 항공편 검색
+
+    단순하고 명확한 편도 항공편 검색을 위한 전용 API입니다.
+    왕복 여행과 달리 귀국 날짜 없이 편도만 검색합니다.
+    """
+    result = await amadeus_service.search_flight_offers(
+        origin=request.origin,
+        destination=request.destination,
+        departure_date=request.departure_date,
+        return_date=None,  # 편도이므로 없음
+        adults=request.adults,
+        currency=request.currency,
+    )
+
+    if not result["success"]:
+        raise HTTPException(status_code=404, detail=result["message"])
+
+    return {
+        "success": True,
+        "message": "편도 항공편 검색 완료",
+        "data": result["data"],
+        "meta": result.get("meta", {}),
+        "dictionaries": result.get("dictionaries", {}),
+        "trip_type": "one-way",
+    }
+
+
 @router.post("/search-by-duration")
 @handle_exceptions("기간별 항공편 검색 중 오류가 발생했습니다")
 @cached_response(duration_search_key, ttl_seconds=1800)
@@ -117,6 +155,7 @@ async def search_cheapest_dates(
         destination=request.destination,
         departure_date=request.departure_date,
         duration=request.duration,
+        one_way=(request.trip_type == "one-way"),
     )
 
     if not result["success"]:
@@ -151,7 +190,7 @@ async def get_airport_info(
 
 @router.get("/popular-routes")
 @handle_exceptions("인기 노선 조회 중 오류가 발생했습니다")
-@cached_response(popular_routes_key, ttl_seconds=21600)
+@cached_response(popular_routes_key, ttl_seconds=7200)  # 2시간으로 단축
 async def get_popular_routes(
     origin: str = Query("ICN", description="출발지 IATA 코드"),
     limit: int = Query(10, description="결과 개수", ge=1, le=50),
@@ -176,6 +215,7 @@ async def flights_health_check(
         "amadeus_active": amadeus_service.is_active,
         "available_endpoints": [
             "search",
+            "search-oneway",
             "search-by-duration",
             "cheapest-dates",
             "airport/{iata_code}",

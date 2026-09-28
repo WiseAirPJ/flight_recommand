@@ -13,6 +13,7 @@ except ImportError:
 import openai
 
 from app.config.settings import settings
+from app.services.cache_service import CacheService
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +64,13 @@ class PriceAlert:
 class LLMService:
     """LLM 기반 분석 서비스"""
 
-    def __init__(self):
+    def __init__(self, cache_service: CacheService = None):
         """LLM 클라이언트 초기화"""
         self.client = self._initialize_client()
         self.model = settings.LLM_MODEL
         self.max_tokens = settings.LLM_MAX_TOKENS
         self.temperature = settings.LLM_TEMPERATURE
-        self.cache = {}
+        self.cache_service = cache_service or CacheService()
         self.cache_ttl = 300  # 5분
         self.price_history = {}
         self.price_alerts = []
@@ -307,19 +308,23 @@ class LLMService:
 
     def _get_from_cache(self, cache_key: str) -> Optional[Dict]:
         """캐시에서 데이터 조회"""
-        if cache_key in self.cache:
-            cached_data, timestamp = self.cache[cache_key]
-            if self._is_cache_valid(timestamp):
+        try:
+            cached_data = self.cache_service.get_cache(f"llm:{cache_key}")
+            if cached_data:
                 logger.info(f"캐시에서 데이터 반환: {cache_key}")
                 return cached_data
-            else:
-                del self.cache[cache_key]
-        return None
+            return None
+        except Exception as e:
+            logger.error(f"캐시 조회 실패: {e}")
+            return None
 
     def _set_cache(self, cache_key: str, data: Dict) -> None:
         """캐시에 데이터 저장"""
-        self.cache[cache_key] = (data, datetime.now())
-        logger.info(f"캐시에 데이터 저장: {cache_key}")
+        try:
+            self.cache_service.set_cache(f"llm:{cache_key}", data, self.cache_ttl)
+            logger.info(f"캐시에 데이터 저장: {cache_key}")
+        except Exception as e:
+            logger.error(f"캐시 저장 실패: {e}")
 
     def _update_price_history(self, flight_data: List[Dict]) -> None:
         """가격 히스토리 업데이트"""
@@ -646,14 +651,13 @@ class LLMService:
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """캐시 통계 정보"""
-        valid_entries = 0
-        for cached_data, timestamp in self.cache.values():
-            if self._is_cache_valid(timestamp):
-                valid_entries += 1
-
-        return {
-            "total_entries": len(self.cache),
-            "valid_entries": valid_entries,
-            "cache_hit_ratio": valid_entries / len(self.cache) if self.cache else 0,
-            "ttl_seconds": self.cache_ttl,
-        }
+        try:
+            return {
+                "service_type": "llm",
+                "cache_backend": "CacheService",
+                "ttl_seconds": self.cache_ttl,
+                "cache_service_stats": "Use CacheService.get_cache_statistics() for detailed stats"
+            }
+        except Exception as e:
+            logger.error(f"캐시 통계 조회 실패: {e}")
+            return {"error": str(e)}

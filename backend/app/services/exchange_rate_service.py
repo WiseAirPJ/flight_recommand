@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from app.config.settings import settings
+from app.services.cache_service import CacheService
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +62,12 @@ class ExchangeRateResponse:
 class ExchangeRateService:
     """한국수출입은행 환율 API 서비스"""
 
-    def __init__(self):
+    def __init__(self, cache_service: CacheService = None):
         self.base_url = "https://oapi.koreaexim.go.kr"
         self.endpoint = "/site/program/financial/exchangeJSON"
         self.auth_key = settings.KOREAEXIM_API_KEY
-        self.cache = {}
-        self.cache_ttl = 3600  # 1시간 캐시
+        self.cache_service = cache_service or CacheService()
+        self.cache_ttl = 14400
 
     async def get_current_rates(
         self, currency_codes: Optional[List[str]] = None
@@ -76,8 +77,8 @@ class ExchangeRateService:
             today = datetime.now().strftime("%Y%m%d")
 
             # 캐시 확인
-            cache_key = f"current_rates_{today}"
-            cached_data = self._get_from_cache(cache_key)
+            cache_key = f"exchange_rate:current_rates_{today}"
+            cached_data = self.cache_service.get_cache(cache_key)
             if cached_data:
                 logger.info("캐시에서 환율 정보 반환")
                 return ExchangeRateResponse(**cached_data)
@@ -113,7 +114,7 @@ class ExchangeRateService:
             )
 
             # 캐시에 저장
-            self._set_cache(cache_key, response.to_dict())
+            self.cache_service.set_cache(cache_key, response.to_dict(), self.cache_ttl)
 
             return response
 
@@ -143,8 +144,8 @@ class ExchangeRateService:
                 )
 
             # 캐시 확인
-            cache_key = f"historical_rates_{date}"
-            cached_data = self._get_from_cache(cache_key)
+            cache_key = f"exchange_rate:historical_rates_{date}"
+            cached_data = self.cache_service.get_cache(cache_key)
             if cached_data:
                 logger.info(f"캐시에서 과거 환율 정보 반환: {date}")
                 return ExchangeRateResponse(**cached_data)
@@ -180,7 +181,7 @@ class ExchangeRateService:
             )
 
             # 캐시에 저장 (과거 데이터는 더 오래 캐시)
-            self._set_cache(cache_key, response.to_dict(), ttl=86400)  # 24시간
+            self.cache_service.set_cache(cache_key, response.to_dict(), 86400)  # 24시간
 
             return response
 
@@ -320,29 +321,7 @@ class ExchangeRateService:
 
     def _get_cache_key(self, prefix: str, date: str) -> str:
         """캐시 키 생성"""
-        return f"{prefix}_{date}"
-
-    def _is_cache_valid(self, timestamp: datetime, ttl: int) -> bool:
-        """캐시 유효성 검사"""
-        return (datetime.now() - timestamp).total_seconds() < ttl
-
-    def _get_from_cache(self, cache_key: str) -> Optional[Dict]:
-        """캐시에서 데이터 조회"""
-        if cache_key in self.cache:
-            cached_data, timestamp, ttl = self.cache[cache_key]
-            if self._is_cache_valid(timestamp, ttl):
-                return cached_data
-            else:
-                del self.cache[cache_key]
-        return None
-
-    def _set_cache(self, cache_key: str, data: Dict, ttl: int = None) -> None:
-        """캐시에 데이터 저장"""
-        if ttl is None:
-            ttl = self.cache_ttl
-
-        self.cache[cache_key] = (data, datetime.now(), ttl)
-        logger.info(f"캐시에 환율 데이터 저장: {cache_key}")
+        return f"exchange_rate:{prefix}_{date}"
 
     def get_supported_currencies(self) -> List[str]:
         """지원하는 통화 코드 목록"""
@@ -443,18 +422,13 @@ class ExchangeRateService:
 
     async def get_cache_stats(self) -> Dict[str, Any]:
         """캐시 통계 정보"""
-        valid_entries = 0
-        total_entries = len(self.cache)
-
-        for cached_data, timestamp, ttl in self.cache.values():
-            if self._is_cache_valid(timestamp, ttl):
-                valid_entries += 1
-
-        return {
-            "total_entries": total_entries,
-            "valid_entries": valid_entries,
-            "cache_hit_ratio": valid_entries / total_entries
-            if total_entries > 0
-            else 0,
-            "default_ttl": self.cache_ttl,
-        }
+        try:
+            return {
+                "service_type": "exchange_rate",
+                "cache_backend": "CacheService",
+                "default_ttl": self.cache_ttl,
+                "cache_service_stats": "Use CacheService.get_cache_statistics() for detailed stats",
+            }
+        except Exception as e:
+            logger.error(f"캐시 통계 조회 실패: {e}")
+            return {"error": str(e)}

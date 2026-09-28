@@ -466,17 +466,24 @@ class CacheService:
             app_keys = self._get_app_cache_keys()
             key_sizes = {}
 
-            for key in app_keys[:20]:  # 상위 20개만 샘플링
+            for key in app_keys[:10]:  # 상위 10개만 샘플링 (성능 최적화)
                 try:
                     # DEBUG OBJECT 명령으로 메모리 사용량 조회
                     # 주의: 프로덕션에서는 성능에 영향을 줄 수 있음
                     memory_usage = self.redis_client.memory_usage(key)
                     key_sizes[key] = memory_usage
-                except Exception:
+                except (
+                    redis.exceptions.ResponseError,
+                    redis.exceptions.ConnectionError,
+                ) as e:
                     # DEBUG OBJECT를 지원하지 않는 Redis 버전
-                    data = self.redis_client.get(key)
-                    if data:
-                        key_sizes[key] = len(data.encode("utf-8"))
+                    logger.warning(f"Redis memory_usage 명령 실패 ({key}): {e}")
+                    try:
+                        data = self.redis_client.get(key)
+                        if data:
+                            key_sizes[key] = len(data.encode("utf-8"))
+                    except Exception as fallback_error:
+                        logger.error(f"키 크기 측정 실패 ({key}): {fallback_error}")
 
             # 상위 사용량 키들
             top_keys = sorted(key_sizes.items(), key=lambda x: x[1], reverse=True)[:10]
@@ -732,3 +739,61 @@ class CacheService:
         except Exception as e:
             logger.error(f"캐시 조회 실패 {key}: {str(e)}")
             return None
+
+    def delete_cache(self, key: str) -> bool:
+        """캐시 삭제 (동기 버전)"""
+        try:
+            if self.is_connected:
+                result = self.redis_client.delete(key)
+                return result > 0
+            else:
+                return self._memory_cache.pop(key, None) is not None
+        except Exception as e:
+            logger.error(f"캐시 삭제 실패 {key}: {str(e)}")
+            return False
+
+    def is_cache_valid(self, key: str) -> bool:
+        """캐시 유효성 검사 (동기 버전)"""
+        try:
+            if self.is_connected:
+                ttl = self.redis_client.ttl(key)
+                return ttl > 0 or ttl == -1  # -1은 만료시간 없음을 의미
+            else:
+                cached = self._memory_cache.get(key)
+                if cached:
+                    expires_at = datetime.fromisoformat(cached["expires_at"])
+                    return datetime.now() < expires_at
+                return False
+        except Exception as e:
+            logger.error(f"캐시 유효성 검사 실패 {key}: {str(e)}")
+            return False
+
+    def clear_cache_pattern(self, pattern: str) -> int:
+        """패턴에 맞는 캐시 삭제 (동기 버전)"""
+        try:
+            deleted_count = 0
+            if self.is_connected:
+                cursor = 0
+                while True:
+                    cursor, keys = self.redis_client.scan(
+                        cursor=cursor, match=pattern, count=100
+                    )
+                    if keys:
+                        deleted_count += self.redis_client.delete(*keys)
+                    if cursor == 0:
+                        break
+            else:
+                import fnmatch
+
+                keys_to_delete = [
+                    k for k in self._memory_cache.keys() if fnmatch.fnmatch(k, pattern)
+                ]
+                for key in keys_to_delete:
+                    del self._memory_cache[key]
+                    deleted_count += 1
+
+            logger.info(f"패턴 '{pattern}'에 맞는 캐시 {deleted_count}개 삭제")
+            return deleted_count
+        except Exception as e:
+            logger.error(f"패턴 캐시 삭제 실패 {pattern}: {str(e)}")
+            return 0

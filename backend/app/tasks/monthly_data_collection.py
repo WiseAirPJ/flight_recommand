@@ -1,15 +1,13 @@
-import asyncio
-import json
 import logging
-from datetime import date, datetime, timedelta
-from typing import Any, Dict
+from datetime import date
+from typing import Any, Dict, List
 
-import redis
 from celery import Celery
 from celery.schedules import crontab
 
 from app.config.settings import settings
-from app.services.monthly_price_analyzer import MonthlyPriceAnalyzer
+from app.services.cache_service import CacheService
+from app.services.monthly_data_collection_service import MonthlyDataCollectionService
 
 # Celery 앱 설정
 celery_app = Celery(
@@ -18,8 +16,9 @@ celery_app = Celery(
     backend=settings.CELERY_RESULT_BACKEND,
 )
 
-# Redis 클라이언트
-redis_client = redis.Redis.from_url(settings.REDIS_URL)
+# 서비스 인스턴스
+cache_service = CacheService()
+collection_service = MonthlyDataCollectionService(cache_service)
 
 logger = logging.getLogger(__name__)
 
@@ -38,38 +37,14 @@ def collect_monthly_cheapest_data(self, year: int, month: int, origin: str = "IC
         origin: 출발지 공항 코드
     """
     try:
-        logger.info(f"월별 데이터 수집 시작: {year}년 {month}월, 출발지: {origin}")
+        logger.info(f"월별 데이터 수집 작업 시작: {year}년 {month}월, 출발지: {origin}")
 
-        # 비동기 함수를 동기적으로 실행
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        analyzer = MonthlyPriceAnalyzer()
-        result = loop.run_until_complete(
-            analyzer.get_monthly_cheapest_dates(
-                target_year=year, target_month=month, origin=origin, trip_duration=4
-            )
+        # 서비스를 통한 데이터 수집
+        result = collection_service.collect_monthly_data_sync(
+            year=year, month=month, origin=origin
         )
 
-        loop.close()
-
         if result["success"]:
-            # Redis에 캐시 저장
-            cache_key = f"monthly_cheapest:{origin}:{year}:{month:02d}"
-            cache_data = {
-                "data": result["data"],
-                "collected_at": datetime.now().isoformat(),
-                "expires_at": (datetime.now() + timedelta(hours=12)).isoformat(),
-            }
-
-            redis_client.setex(
-                cache_key,
-                timedelta(hours=12),  # 12시간 캐시
-                json.dumps(cache_data, default=str),
-            )
-
-            logger.info(f"데이터 수집 완료 및 캐시 저장: {cache_key}")
-
             # 작업 상태 업데이트
             self.update_state(
                 state="SUCCESS",
@@ -77,20 +52,22 @@ def collect_monthly_cheapest_data(self, year: int, month: int, origin: str = "IC
                     "year": year,
                     "month": month,
                     "origin": origin,
-                    "regions_collected": len(result["data"].get("regions", {})),
-                    "cache_key": cache_key,
+                    "regions_collected": result.get("regions_collected", 0),
+                    "cache_saved": result.get("cache_saved", False),
+                    "collected_at": result.get("collected_at"),
                 },
             )
 
-            return f"Successfully collected data for {year}-{month:02d} from {origin}"
+            logger.info(f"월별 데이터 수집 작업 완료: {year}-{month:02d} from {origin}")
+            return result["message"]
 
         else:
-            raise Exception(f"데이터 수집 실패: {result.get('message', 'Unknown error')}")
+            raise Exception(result.get("message", "Unknown error"))
 
     except Exception as e:
-        logger.error(f"월별 데이터 수집 실패: {str(e)}")
+        logger.error(f"월별 데이터 수집 작업 실패: {str(e)}")
 
-        # 실패 시 재시도
+        # 실패 시 상태 업데이트
         self.update_state(
             state="FAILURE", meta={"error": str(e), "year": year, "month": month}
         )
@@ -170,34 +147,20 @@ def cleanup_expired_cache():
     매일 새벽 1시에 실행
     """
     try:
-        # 월별 캐시 키 패턴
-        pattern = "monthly_cheapest:*"
-        keys = redis_client.keys(pattern)
+        logger.info("만료된 캐시 정리 작업 시작")
 
-        cleaned_count = 0
-        for key in keys:
-            try:
-                data = redis_client.get(key)
-                if data:
-                    cache_info = json.loads(data)
-                    expires_at = datetime.fromisoformat(
-                        cache_info.get("expires_at", "")
-                    )
+        # 서비스를 통한 캐시 정리
+        result = collection_service.cleanup_expired_cache()
 
-                    if datetime.now() > expires_at:
-                        redis_client.delete(key)
-                        cleaned_count += 1
-
-            except (json.JSONDecodeError, ValueError, KeyError):
-                # 잘못된 형식의 캐시는 삭제
-                redis_client.delete(key)
-                cleaned_count += 1
-
-        logger.info(f"만료된 캐시 {cleaned_count}개 정리 완료")
-        return f"Cleaned {cleaned_count} expired cache entries"
+        if result["success"]:
+            logger.info(f"캐시 정리 작업 완료: {result['cleaned_count']}개 정리")
+            return result["message"]
+        else:
+            logger.error(f"캐시 정리 작업 실패: {result['message']}")
+            return result["message"]
 
     except Exception as e:
-        logger.error(f"캐시 정리 실패: {str(e)}")
+        logger.error(f"캐시 정리 작업 예외 발생: {str(e)}")
         return f"Cache cleanup failed: {str(e)}"
 
 
@@ -208,22 +171,22 @@ def update_cache_statistics():
     매시간 실행
     """
     try:
-        pattern = "monthly_cheapest:*"
-        keys = redis_client.keys(pattern)
+        logger.info("캐시 통계 업데이트 작업 시작")
 
-        stats = {
-            "total_cached_months": len(keys),
-            "cache_keys": [key.decode() for key in keys],
-            "last_updated": datetime.now().isoformat(),
-        }
+        # 서비스를 통한 통계 조회
+        stats = collection_service.get_collection_statistics()
 
-        # 통계 정보 저장
-        redis_client.setex("cache_statistics", timedelta(hours=1), json.dumps(stats))
+        if stats["success"]:
+            # 통계 정보를 캐시에 저장
+            cache_service.set_cache("cache_statistics", stats, 3600)  # 1시간 캐시
+            logger.info(f"캐시 통계 업데이트 완료: {stats['total_cached_months']}개 항목")
+        else:
+            logger.error(f"캐시 통계 조회 실패: {stats.get('error', 'Unknown error')}")
 
         return stats
 
     except Exception as e:
-        logger.error(f"캐시 통계 업데이트 실패: {str(e)}")
+        logger.error(f"캐시 통계 업데이트 작업 예외 발생: {str(e)}")
         return {"error": str(e)}
 
 
@@ -235,30 +198,56 @@ def force_collect_month_data(year: int, month: int, origin: str = "ICN"):
     """
     특정 월 데이터 강제 수집 (관리자용)
     """
-    logger.info(f"강제 데이터 수집 요청: {year}년 {month}월")
+    try:
+        logger.info(f"강제 데이터 수집 작업 시작: {year}년 {month}월")
 
-    # 기존 캐시 삭제
-    cache_key = f"monthly_cheapest:{origin}:{year}:{month:02d}"
-    redis_client.delete(cache_key)
+        # 서비스를 통한 강제 갱신
+        result = collection_service.force_refresh_month_data(year, month, origin)
 
-    # 새로 수집
-    return collect_monthly_cheapest_data.delay(year, month, origin)
+        if result["success"]:
+            logger.info(f"강제 데이터 수집 완료: {year}년 {month}월")
+        else:
+            logger.error(f"강제 데이터 수집 실패: {result['message']}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"강제 데이터 수집 작업 예외 발생: {str(e)}")
+        return {"success": False, "message": f"강제 수집 작업 실패: {str(e)}", "error": str(e)}
 
 
 @celery_app.task
-def collect_multi_origin_data(year: int, month: int, origins: list = None):
+def collect_multi_origin_data(year: int, month: int, origins: List[str] = None):
     """
     여러 출발지에 대한 데이터 수집
     """
-    if origins is None:
-        origins = ["ICN"]  # 현재는 ICN만 지원
+    try:
+        if origins is None:
+            origins = ["ICN"]  # 현재는 ICN만 지원
 
-    tasks = []
-    for origin in origins:
-        task = collect_monthly_cheapest_data.delay(year, month, origin)
-        tasks.append(task.id)
+        logger.info(f"다중 출발지 데이터 수집 작업 시작: {len(origins)}개 출발지")
 
-    return tasks
+        tasks = []
+        for origin in origins:
+            task = collect_monthly_cheapest_data.delay(year, month, origin)
+            tasks.append(task.id)
+
+        logger.info(f"다중 출발지 수집 작업 생성 완료: {len(tasks)}개 작업")
+        return {
+            "success": True,
+            "message": f"{len(tasks)}개 수집 작업 생성 완료",
+            "task_ids": tasks,
+            "origins": origins,
+        }
+
+    except Exception as e:
+        logger.error(f"다중 출발지 수집 작업 예외 발생: {str(e)}")
+        return {
+            "success": False,
+            "message": f"다중 출발지 수집 작업 실패: {str(e)}",
+            "error": str(e),
+            "task_ids": [],
+        }
 
 
 # Celery Beat 스케줄 설정
@@ -294,7 +283,7 @@ celery_app.conf.beat_schedule = {
 celery_app.conf.timezone = "Asia/Seoul"
 
 
-#  헬퍼 함수
+# 헬퍼 함수
 
 
 def get_cached_monthly_data(
@@ -306,24 +295,14 @@ def get_cached_monthly_data(
     Returns:
         캐시된 데이터 또는 None
     """
-    cache_key = f"monthly_cheapest:{origin}:{year}:{month:02d}"
-
-    try:
-        cached_data = redis_client.get(cache_key)
-        if cached_data:
-            return json.loads(cached_data)
-    except (json.JSONDecodeError, Exception) as e:
-        logger.warning(f"캐시 데이터 읽기 실패: {str(e)}")
-
-    return None
+    return collection_service.get_cached_monthly_data(year, month, origin)
 
 
 def is_month_data_available(year: int, month: int, origin: str = "ICN") -> bool:
     """
     해당 월 데이터가 캐시에 있는지 확인
     """
-    cache_key = f"monthly_cheapest:{origin}:{year}:{month:02d}"
-    return redis_client.exists(cache_key) > 0
+    return collection_service.is_month_data_available(year, month, origin)
 
 
 def trigger_month_collection_if_needed(

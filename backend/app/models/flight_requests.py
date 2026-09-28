@@ -56,6 +56,26 @@ class FlightDurationSearchRequest(BaseModel):
         return validate_passenger_count(v)
 
 
+class OneWayFlightSearchRequest(BaseModel):
+    """편도 항공편 검색 요청"""
+
+    origin: str = Field(..., description="출발지 IATA 코드")
+    destination: str = Field(..., description="도착지 IATA 코드")
+    departure_date: str = Field(..., description="출발 날짜 (YYYY-MM-DD)")
+    adults: int = Field(1, description="성인 승객 수", ge=1, le=9)
+    currency: str = Field("KRW", description="통화 코드")
+
+    @field_validator("departure_date")
+    @classmethod
+    def validate_departure_date(cls, v):
+        return validate_date_format(v)
+
+    @field_validator("adults")
+    @classmethod
+    def validate_adults(cls, v):
+        return validate_passenger_count(v)
+
+
 class CheapestDateRequest(BaseModel):
     """최저가 날짜 검색 요청"""
 
@@ -64,6 +84,7 @@ class CheapestDateRequest(BaseModel):
     departure_date: str = Field(..., description="기준 출발 날짜 (YYYY-MM-DD)")
     duration: Optional[int] = Field(None, description="여행 기간 (일수)", ge=1, le=30)
     flexibility_days: int = Field(7, description="날짜 유연성 (±일수)", ge=1, le=15)
+    trip_type: str = Field("round-trip", description="여행 유형 (one-way, round-trip)")
 
     @field_validator("departure_date")
     @classmethod
@@ -74,3 +95,10 @@ class CheapestDateRequest(BaseModel):
     @classmethod
     def validate_duration(cls, v):
         return validate_duration(v, min_days=1) if v else v
+
+    @field_validator("trip_type")
+    @classmethod
+    def validate_trip_type(cls, v):
+        if v not in ["one-way", "round-trip"]:
+            raise ValueError("trip_type must be 'one-way' or 'round-trip'")
+        return v

@@ -36,11 +36,12 @@ class AmadeusService:
         destination: str,
         departure_date: str,
         duration: Optional[int] = None,
+        one_way: bool = False,
     ) -> Dict[str, Any]:
         """특정 구간의 최저가 날짜 검색"""
         if not self.is_active:
             return await self._get_dummy_cheapest_dates(
-                origin, destination, departure_date, duration
+                origin, destination, departure_date, duration, one_way
             )
 
         try:
@@ -52,7 +53,7 @@ class AmadeusService:
                     "origin": origin,
                     "destination": destination,
                     "departureDate": departure_date,
-                    "oneWay": False,
+                    "oneWay": one_way,
                     "currency": "KRW",
                     "maxPrice": 2000000,
                 }
@@ -217,20 +218,23 @@ class AmadeusService:
         destination: str,
         departure_date: str,
         duration: Optional[int],
+        one_way: bool = False,
     ) -> Dict[str, Any]:
         """더미 최저가 날짜 데이터"""
+        dummy_data = {
+            "type": "flight-date",
+            "origin": origin,
+            "destination": destination,
+            "departureDate": departure_date,
+            "price": {"total": "180000" if one_way else "280000", "currency": "KRW"},
+        }
+
+        if not one_way:
+            dummy_data["returnDate"] = "2025-08-18"
+
         return {
             "success": True,
-            "data": [
-                {
-                    "type": "flight-date",
-                    "origin": origin,
-                    "destination": destination,
-                    "departureDate": departure_date,
-                    "returnDate": "2025-08-18",
-                    "price": {"total": "280000", "currency": "KRW"},
-                }
-            ],
+            "data": [dummy_data],
             "meta": {"count": 1},
         }
 
@@ -342,7 +346,7 @@ class AmadeusService:
     async def _convert_prices_to_krw(self, data, from_currency: str):
         """가격 데이터를 KRW로 변환"""
         try:
-            # 환율 정보 가져오기
+            # 환율 정보 가져오기 (캐시 우선 사용으로 API 호출 최소화)
             rates_response = await self.exchange_rate_service.get_current_rates(
                 [from_currency]
             )

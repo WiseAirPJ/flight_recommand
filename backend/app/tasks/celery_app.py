@@ -1,7 +1,11 @@
+import logging
+
 from celery import Celery
 from celery.schedules import crontab
 
 from app.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 # Celery 인스턴스 생성
 celery_app = Celery(
@@ -89,17 +93,17 @@ celery_app.conf.beat_schedule = {
 @celery_app.on_after_configure.connect
 def setup_periodic_tasks(sender, **kwargs):
     """Celery 시작 시 추가 설정"""
-    print("Celery 스케줄러가 시작되었습니다.")
-    print("등록된 스케줄 작업:")
+    logger.info("Celery 스케줄러가 시작되었습니다.")
+    logger.info("등록된 스케줄 작업:")
     for name, task in celery_app.conf.beat_schedule.items():
-        print(f"  - {name}: {task['task']}")
+        logger.info(f"  - {name}: {task['task']}")
 
 
 # 작업 실행 전 로깅
 @celery_app.task(bind=True)
 def debug_task(self):
     """디버그용 태스크"""
-    print(f"Request: {self.request!r}")
+    logger.debug(f"Request: {self.request!r}")
     return "Debug task completed"
 
 

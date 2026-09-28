@@ -1,8 +1,12 @@
+import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.exceptions import NotFittedError
+
+logger = logging.getLogger(__name__)
 
 
 class PricePredictionService:
@@ -85,12 +89,13 @@ class PricePredictionService:
             self.is_trained = True
             return True
 
-        except Exception:
+        except (ImportError, ValueError, MemoryError) as e:
+            logger.error(f"모델 훈련 실패: {e}")
             return False
 
     def predict_price(
         self, departure_date: str, current_date: Optional[str] = None
-    ) -> Dict:
+    ) -> Dict[str, Any]:
         if not self.is_trained:
             if not self.train_model():
                 return {"error": "모델 훈련 실패"}
@@ -128,7 +133,8 @@ class PricePredictionService:
                 "recommendation": self._get_recommendation(days_to_departure),
             }
 
-        except Exception as e:
+        except (ValueError, NotFittedError, TypeError) as e:
+            logger.error(f"가격 예측 실패: {e}")
             return {"error": f"예측 실패: {str(e)}"}
 
     def get_price_trend(self, departure_date: str, days_range: int = 30) -> List[Dict]:
@@ -163,5 +169,6 @@ class PricePredictionService:
 
             return trends
 
-        except Exception:
+        except (ValueError, TypeError) as e:
+            logger.error(f"가격 트렌드 생성 실패: {e}")
             return []
