@@ -5,6 +5,7 @@ import asyncio
 from app.config.settings import settings
 from app.core.database import init_db
 from app.models.flight_requests import MonthlySearchRequest
+from app.services.cache_admin_service import CacheAdminService
 from app.services.cache_service import CacheService
 from app.services.monthly_price_analyzer import MonthlyPriceAnalyzer
 from app.utils.cache_keys import monthly_search_key
@@ -40,7 +41,7 @@ class MonthlyDataCollectionService:
         )
 
     def cleanup_expired_cache(self):
-        return asyncio.run(self.cache_service.cleanup_expired_cache())
+        return CacheAdminService(self.cache_service).cleanup_expired_cache()
 
     def get_collection_statistics(self):
-        return asyncio.run(self.cache_service.get_cache_statistics())
+        return CacheAdminService(self.cache_service).get_cache_statistics()
