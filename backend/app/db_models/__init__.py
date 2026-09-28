@@ -3,6 +3,7 @@
 from app.db_models.base import Base
 from app.db_models.flight import Flight
 from app.db_models.flight_search import FlightSearch
+from app.db_models.monthly_search import MonthlySearch
 from app.db_models.price_history import PriceHistory
 from app.db_models.price_observation import PriceObservation
 from app.db_models.recommendation import Recommendation
@@ -18,4 +19,5 @@ __all__ = [
     "UserPreference",
     "PriceHistory",
     "PriceObservation",
+    "MonthlySearch",
 ]

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -5,11 +6,13 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.v1.regions import get_monthly_analyzer
+from app.api.v1.regions import get_monthly_search_service
 from app.config.settings import settings
 from app.main import app
+from app.models.flight_requests import MonthlySearchRequest
 from app.services.cache_service import CacheService
 from app.services.monthly_price_analyzer import MonthlyPriceAnalyzer
+from app.services.monthly_search_service import MonthlySearchService
 
 
 def target_month():
@@ -148,10 +151,25 @@ async def test_partial_results_disclosed_and_not_cached():
 
 def test_map_endpoint_preserves_metadata_and_validates():
     analyzer = MonthlyPriceAnalyzer(amadeus_service=provider())
-    app.dependency_overrides[get_monthly_analyzer] = lambda: analyzer
+    enqueue = Mock()
+    store = MonthlySearchService(source="amadeus_test", enqueue=enqueue)
+    app.dependency_overrides[get_monthly_search_service] = lambda: store
     try:
         with TestClient(app) as client:
             year, month = target_month()
+            request = MonthlySearchRequest(
+                year=year, month=month, origin="CJJ", adults=2, currency="USD"
+            )
+            store.request(request)
+            key, token = enqueue.call_args.args
+            store.claim(key, token)
+            collected = asyncio.run(
+                analyzer.get_monthly_cheapest_dates(
+                    year, month, "CJJ", adults=2, currency="USD"
+                )
+            )
+            store.complete(key, token, collected)
+            provider_calls = analyzer.amadeus_service.search_flight_offers.call_count
             response = client.get(
                 "/api/v1/regions/lowest-prices",
                 params={
@@ -163,6 +181,10 @@ def test_map_endpoint_preserves_metadata_and_validates():
                 },
             )
             assert response.status_code == 200
+            assert (
+                analyzer.amadeus_service.search_flight_offers.call_count
+                == provider_calls
+            )
             data = response.json()
             assert data["meta"]["origin"] == "CJJ"
             assert data["data"]["kanto"]["currency"] == "USD"
@@ -182,13 +204,13 @@ def test_map_endpoint_preserves_metadata_and_validates():
                     "/api/v1/regions/monthly-analysis",
                     json={"year": year, "month": month, "origin": "PUS"},
                 ).status_code
-                == 200
+                == 202
             )
             assert (
                 client.get(
                     f"/api/v1/regions/monthly-analysis/{year}/{month}"
                 ).status_code
-                == 200
+                == 202
             )
             assert (
                 client.get("/api/v1/regions/monthly-analysis/2000/1").status_code == 422
@@ -204,7 +226,7 @@ def test_map_endpoint_preserves_metadata_and_validates():
             }
             assert {"ICN", "PUS", "CJJ", "TAE", "GMP"} <= codes
     finally:
-        app.dependency_overrides.pop(get_monthly_analyzer, None)
+        app.dependency_overrides.pop(get_monthly_search_service, None)
 
 
 def test_map_query_rolls_past_month_to_next_year(monkeypatch):
@@ -222,7 +244,7 @@ def test_map_query_rolls_past_month_to_next_year(monkeypatch):
         request_seen.append(request)
         return {"data": {"regions": {}, "searched_at": "now"}, "message": "ok"}
 
-    monkeypatch.setattr(api, "_analyze", capture)
+    monkeypatch.setattr(api, "_get_monthly_result", capture)
     # Month model still sees real time, so choose a supported next year.
     if date.today().year != 2026:
         monkeypatch.setattr("app.models.flight_requests.date", FixedDate)
@@ -233,7 +255,9 @@ def test_map_query_rolls_past_month_to_next_year(monkeypatch):
 
 def test_legacy_monthly_query_duration_alias():
     analyzer = MonthlyPriceAnalyzer(amadeus_service=provider())
-    app.dependency_overrides[get_monthly_analyzer] = lambda: analyzer
+    enqueue = Mock()
+    store = MonthlySearchService(source="amadeus_test", enqueue=enqueue)
+    app.dependency_overrides[get_monthly_search_service] = lambda: store
     year, month = target_month()
     try:
         with TestClient(app) as client:
@@ -242,7 +266,7 @@ def test_legacy_monthly_query_duration_alias():
                 params={"year": year, "month": month, "duration": 5},
             )
             assert (
-                response.status_code == 200
+                response.status_code == 202
                 and response.json()["data"]["duration_days"] == 5
             )
             assert (
@@ -257,4 +281,4 @@ def test_legacy_monthly_query_duration_alias():
                 == 6
             )
     finally:
-        app.dependency_overrides.pop(get_monthly_analyzer, None)
+        app.dependency_overrides.pop(get_monthly_search_service, None)

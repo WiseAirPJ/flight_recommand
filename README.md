@@ -37,17 +37,36 @@ uv run --locked uvicorn app.main:app --reload
 
 가격은 **입력한 성인 전체의 왕복 합계**입니다. `duration_days=4`는 출발일부터 귀국일까지 4일(3박)입니다. 수하물 추가요금을 임의로 더하지 않으며 제공된 항공사 운임 조건을 확인해야 합니다.
 
-기본 월별 검색은 3일 간격으로 출발일을 조회하고 CTS/NRT/HND/KIX/NGO/FUK/OKA를 비교합니다. 모든 일본 공항·날짜·항공사를 포괄하는 최저가가 아닙니다. 화면에는 “조회한 날짜 중 최저가”로 표시하고, `meta.sampled_dates`, `searched_airports`, `source`, `partial`, `failed_searches`, 가격의 `observed_at`을 사용하세요. 결과가 없는 지역은 가격 없음으로 표시합니다. 나리타보다 하네다가 저렴하면 하네다 결과를 표시합니다. 출발공항 목록은 운항 노선을 보장하지 않습니다.
+기본 월별 검색은 3일 간격으로 출발일을 조회하고 CTS/NRT/HND/KIX/NGO/FUK/OKA를 비교합니다. 모든 일본 공항·날짜·항공사를 포괄하는 최저가가 아닙니다. 화면에는 “조회한 날짜 중 최저가”로 표시하고, `meta.sampled_dates`, `searched_airports`, `source`, `partial`, `failed_searches`, 가격의 `observed_at`을 사용하세요. 완료된 결과가 없는 지역은 가격 없음으로 표시합니다. 수집 중인 202 응답은 매진이나 가격 없음으로 해석하지 마세요. 나리타보다 하네다가 저렴하면 하네다 결과를 표시합니다. 출발공항 목록은 운항 노선을 보장하지 않습니다.
+
+## 지도 응답과 백그라운드 수집
+
+지도와 모든 월별 API는 외부 항공권 조회가 끝날 때까지 기다리지 않습니다. 최초 요청은 수집을 예약하고 **202**와 빈 `data`를 반환합니다. `Retry-After: 5`에 맞춰 같은 조건으로 다시 조회하세요. 지도는 `meta.status`, 월별 API는 `data.status`를 사용합니다.
+
+- `pending` / `running`: 수집 대기·진행 중. 가격이 없다는 의미가 아닙니다.
+- `ready`: **200**, 마지막 성공 결과가 갱신 간격 안에 있습니다.
+- `stale`: **200**, 이전 성공 결과를 표시하면서 갱신합니다. `stale=true`, `refresh_status`, `refresh_error`, 각 가격의 `observed_at`을 확인하세요.
+- 저장된 결과가 없고 예약·수집에 실패한 경우 **503**을 반환합니다. 실패 직후에는 60초간 재예약을 억제합니다.
+
+기본 갱신 간격은 1시간이며 마지막 성공 결과는 최대 7일 동안 조회에 사용할 수 있습니다. 이는 현재 예약 가능한 가격을 보장하는 기간이 아닙니다. 출발일이 지난 선택지는 응답에서 제외합니다. API·worker는 같은 DB를 사용해야 하며 운영은 PostgreSQL이 필요합니다. 로컬 SQLite는 동일 파일을 공유하는 개발용 구성입니다.
+
+검색 조건·공급자·샘플 간격별 DB 작업 하나만 실행합니다. 작업 소유권은 기본 180초이며 각 검색 전과 결과 저장 시 갱신합니다. 멈춘 작업은 이후 조회 또는 예약 수집에서 다시 예약할 수 있습니다. 이전 작업이 뒤늦게 돌아와 새 결과를 덮어쓰는 것은 차단합니다.
+
+부분 실패 시 성공한 항공권 응답을 DB에 남겨 실패한 날짜·공항만 재조회합니다. 관측값 저장만 실패하면 보관한 응답으로 저장을 다시 시도합니다. 동일 관측값의 재저장은 고유 키로 중복을 막습니다. 체크포인트가 갱신 간격보다 오래되거나 날짜가 바뀌면 새로 수집합니다. 재시도는 60·120·240초 간격으로 최대 3회입니다.
+
+운영 공급자 HTTP 호출은 API와 worker가 공유하는 Redis에서 기본 초당 5회 간격으로 제한합니다. 토큰 발급도 이 경로를 사용합니다. 허용을 기다리는 시간은 최대 10초, 각 HTTP 소켓 제한 시간은 20초입니다. 설정된 Redis가 실패하면 무제한 호출로 우회하지 않습니다. 월별 조회·개별 검색·환율 검색의 동기 DB/Redis 작업은 이벤트 루프 밖에서 처리합니다.
 
 ## 구조와 실행 흐름
 
 ```text
 backend/app/main.py                      앱 시작·라우터·오류 처리·관리자 보호
   api/v1/regions.py                      지도·월별 검색 입력
-    services/monthly_price_analyzer.py   날짜와 공항별 검색, 최저가 선택
-      services/amadeus_service.py       개별·월별 검색 공통 공급자 경로
-        services/exchange_rate_service.py   통화 환산
-        services/price_history_service.py   실제 관측값 저장
+    services/monthly_search_service.py   DB 결과 조회·조건별 수집 예약·작업 소유권
+  tasks/monthly_data_collection.py       백그라운드 수집·실패 항목 재시도
+    services/monthly_price_analyzer.py   날짜와 공항별 검색·중간 결과 저장
+      services/amadeus_service.py       공급자 검색·환율 환산·관측값 저장
+        services/provider_http.py      프로세스 간 호출 간격 제한·HTTP 제한 시간
+        services/price_history_service.py   관측값 중복 저장 방지
   models/                               API 입력·응답 모델
   db_models/                            SQLAlchemy 저장 모델
   core/database.py                      공통 연결·세션
@@ -96,7 +115,15 @@ uv run --locked pytest
 
 CI는 모든 테스트를 실행하고 전체 코드 커버리지를 보고합니다. 통합한 검색·환율·월별 분석·저장·수집 경로에는 80% 커버리지 기준을 실제로 적용합니다. 기존에는 전체 80% 설정이 있었지만 CI에서 pytest 자체를 실행하지 않았습니다. 아직 검증이 부족한 실험·관리 기능까지 전체 80%를 달성했다고 주장하지 않습니다.
 
-외부 공급자는 테스트에서 대체하고 DB는 격리된 SQLite를 사용합니다. 실제 Amadeus/환율 응답, PostgreSQL 서버, Redis/Celery 다중 프로세스 운영은 별도 통합 환경 검증이 필요합니다.
+외부 공급자는 테스트에서 대체하고 DB는 격리된 SQLite를 사용합니다. 실제 Amadeus/환율 응답 및 운영 부하 용량은 별도 검증이 필요합니다. PostgreSQL 독립 프로세스의 중복 방지, Redis 공유 호출량 제한, Celery 실제 브로커 전달은 아래 통합 테스트와 CI에서 검증합니다. 테스트 공급자는 데모이며 유료 API를 호출하지 않습니다.
+
+```sh
+# 테스트 전용 PostgreSQL/Redis 주소만 사용하세요.
+TEST_POSTGRES_URL=postgresql://postgres:password@localhost:5432/flight_test \
+TEST_REDIS_URL=redis://localhost:6379/0 uv run --locked pytest tests/test_collection_external.py
+```
+
+DB 통합 테스트는 자신이 생성한 임시 스키마만 사용·삭제합니다. 환경변수가 없으면 해당 4개 테스트는 건너뜁니다.
 
 ## 브랜치 전략
 

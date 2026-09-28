@@ -314,12 +314,16 @@ def warmup_cache(
             regions=regions, months_ahead=months_ahead
         )
 
+        if not warmup_result["success"]:
+            raise HTTPException(status_code=503, detail=warmup_result)
         return {
             "success": True,
             "message": "캐시 워밍업이 시작되었습니다",
             "data": warmup_result,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"캐시 워밍업 중 오류가 발생했습니다: {str(e)}"

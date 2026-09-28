@@ -1,5 +1,8 @@
 # 📡 API 문서
 
+> 월별 검색 계약 변경: `/regions/lowest-prices`와 모든 `/regions/monthly-analysis` 경로는 저장된 결과를 조회하고 백그라운드 수집을 예약합니다. 최초 수집은 **202**이며 `Retry-After: 5` 이후 같은 조건을 다시 조회합니다. 지도는 `meta.status`, 월별 API는 `data.status`로 `pending/running/ready/stale`을 구분합니다. 이전 결과가 있으면 `stale=true`로 **200** 응답하고 갱신 상태를 함께 제공합니다. 결과 없이 실패하면 **503**입니다. 빈 202 응답은 매진을 뜻하지 않습니다. 현재 계약과 운영 설정은 [README](README.md#지도-응답과-백그라운드-수집)를 참고하세요.
+
+
 지능형 일본 항공권 분석기 REST API 상세 문서입니다.
 
 ## 🎯 현재 상태: 48개 엔드포인트 완전 구현 ✅

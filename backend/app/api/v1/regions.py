@@ -1,13 +1,15 @@
 """Map and monthly search API. All fare metadata is retained for the UI."""
 
+import asyncio
 from datetime import date
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.models.flight_requests import MonthlySearchRequest
-from app.services.monthly_price_analyzer import MonthlyPriceAnalyzer
+from app.services.monthly_search_service import MonthlySearchService
 from app.services.region_service import RegionService
 
 router = APIRouter(prefix="/regions", tags=["regions"])
@@ -19,8 +21,8 @@ def get_region_service():
 
 
 @lru_cache
-def get_monthly_analyzer():
-    return MonthlyPriceAnalyzer()
+def get_monthly_search_service():
+    return MonthlySearchService()
 
 
 @router.get("/")
@@ -49,16 +51,9 @@ async def departure_airports():
     }
 
 
-async def _analyze(request, analyzer):
-    result = await analyzer.get_monthly_cheapest_dates(
-        request.year,
-        request.month,
-        origin=request.origin,
-        trip_duration=request.duration_days,
-        adults=request.adults,
-        currency=request.currency,
-        non_stop=request.non_stop,
-    )
+async def _get_monthly_result(request, search_service):
+    result = await asyncio.to_thread(search_service.request, request)
+    result.pop("enqueued", None)
     if not result["success"]:
         raise HTTPException(result.get("status_code", 502), result["message"])
     return result
@@ -73,7 +68,7 @@ async def get_regions_lowest_prices(
     duration_days: int = Query(4, ge=2, le=30),
     currency: str = "KRW",
     non_stop: bool = False,
-    analyzer=Depends(get_monthly_analyzer),
+    search_service=Depends(get_monthly_search_service),
 ):
     today = date.today()
     target_month = month or today.month
@@ -92,7 +87,7 @@ async def get_regions_lowest_prices(
         )
     except ValidationError as exc:
         raise HTTPException(422, "검색 월·출발공항·통화를 확인하세요.") from exc
-    result = await _analyze(request, analyzer)
+    result = await _get_monthly_result(request, search_service)
     data = result["data"]
     prices = {
         region_id: {
@@ -103,20 +98,29 @@ async def get_regions_lowest_prices(
         }
         for region_id, region in data["regions"].items()
     }
-    return {
-        "success": True,
-        "message": result["message"],
-        "data": prices,
-        "meta": {key: value for key, value in data.items() if key != "regions"},
-        "last_updated": data["searched_at"],
-    }
+    return JSONResponse(
+        status_code=result.get("status_code", 200),
+        headers={"Retry-After": "5"} if result.get("status_code") == 202 else {},
+        content={
+            "success": True,
+            "message": result["message"],
+            "data": prices,
+            "meta": {key: value for key, value in data.items() if key != "regions"},
+            "last_updated": data["searched_at"],
+        },
+    )
 
 
 @router.post("/monthly-analysis")
 async def monthly_analysis(
-    request: MonthlySearchRequest, analyzer=Depends(get_monthly_analyzer)
+    request: MonthlySearchRequest, search_service=Depends(get_monthly_search_service)
 ):
-    return await _analyze(request, analyzer)
+    result = await _get_monthly_result(request, search_service)
+    return JSONResponse(
+        status_code=result.get("status_code", 200),
+        headers={"Retry-After": "5"} if result.get("status_code") == 202 else {},
+        content=result,
+    )
 
 
 @router.get("/monthly-analysis")
@@ -129,7 +133,7 @@ async def get_monthly_analysis(
     duration: int | None = Query(None, ge=2, le=30, deprecated=True),
     currency: str = "KRW",
     non_stop: bool = False,
-    analyzer=Depends(get_monthly_analyzer),
+    search_service=Depends(get_monthly_search_service),
 ):
     today = date.today()
     target_month = month or today.month
@@ -145,7 +149,7 @@ async def get_monthly_analysis(
         duration,
         currency,
         non_stop,
-        analyzer,
+        search_service,
     )
 
 
@@ -159,7 +163,7 @@ async def monthly_analysis_by_month(
     duration: int | None = Query(None, ge=2, le=30, deprecated=True),
     currency: str = "KRW",
     non_stop: bool = False,
-    analyzer=Depends(get_monthly_analyzer),
+    search_service=Depends(get_monthly_search_service),
 ):
     if duration is not None and duration_days is not None and duration != duration_days:
         raise HTTPException(422, "여행 기간 조건이 서로 다릅니다.")
@@ -175,7 +179,12 @@ async def monthly_analysis_by_month(
         )
     except ValidationError as exc:
         raise HTTPException(422, "검색 조건을 확인하세요.") from exc
-    return await _analyze(request, analyzer)
+    result = await _get_monthly_result(request, search_service)
+    return JSONResponse(
+        status_code=result.get("status_code", 200),
+        headers={"Retry-After": "5"} if result.get("status_code") == 202 else {},
+        content=result,
+    )
 
 
 @router.get("/statistics")

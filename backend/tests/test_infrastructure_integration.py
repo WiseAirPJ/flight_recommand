@@ -120,12 +120,13 @@ def test_worker_uses_same_app_and_all_origins(monkeypatch):
     from app.tasks.celery_app import celery_app
 
     monkeypatch.setattr(settings, "COLLECTION_ORIGINS", ["PUS", "CJJ"])
-    delay = Mock(return_value=SimpleNamespace(id="task-id"))
-    monkeypatch.setattr(tasks.collect_monthly_cheapest_data, "delay", delay)
-    assert tasks.collect_monthly_cheapest_data.app is celery_app
+    store = Mock()
+    store.request.return_value = {"success": True, "data": {"job_id": "task-id"}}
+    monkeypatch.setattr(tasks, "MonthlySearchService", lambda: store)
+    assert tasks.run_monthly_search.app is celery_app
     assert tasks.collect_current_month_data.run() == ["task-id", "task-id"]
-    assert {call.args[2] for call in delay.call_args_list} == {"PUS", "CJJ"}
-    delay.reset_mock()
+    assert {c.args[0].origin for c in store.request.call_args_list} == {"PUS", "CJJ"}
+    store.reset_mock()
     assert tasks.collect_next_month_data.run() == ["task-id", "task-id"]
     result = tasks.collect_popular_months_data.run()
     assert len(result) == 10 and all(isinstance(item, str) for item in result)
@@ -134,12 +135,17 @@ def test_worker_uses_same_app_and_all_origins(monkeypatch):
 def test_worker_collection_contract(monkeypatch):
     from app.tasks import monthly_data_collection as tasks
 
-    result = {"success": True, "data": {"partial": False}, "message": "ok"}
-    service = Mock()
-    service.collect_monthly_data_sync.return_value = result
-    monkeypatch.setattr(tasks, "MonthlyDataCollectionService", lambda: service)
-    assert tasks.collect_monthly_cheapest_data.run(2027, 1, "CJJ") == result
-    service.collect_monthly_data_sync.assert_called_once_with(2027, 1, "CJJ")
+    result = {"success": True, "data": {"status": "pending"}}
+    store = Mock()
+    store.request.return_value = result
+    monkeypatch.setattr(tasks, "MonthlySearchService", lambda: store)
+    future = (date.today().replace(day=1) + timedelta(days=32)).replace(day=1)
+    assert (
+        tasks.collect_monthly_cheapest_data.run(future.year, future.month, "CJJ")
+        == result
+    )
+    assert store.request.call_args.args[0].origin == "CJJ"
+    assert store.request.call_args.kwargs == {"force_refresh": True}
 
 
 def test_migrations_upgrade_downgrade_and_model_consistency(tmp_path, monkeypatch):
@@ -178,40 +184,6 @@ def test_redis_preserves_lists_like_memory():
     assert json.loads(encoded) == records
     service.redis_client.get.return_value = encoded
     assert service.get_cache("holidays") == records
-
-
-def test_collection_adapter_executes_canonical_analyzer(monkeypatch):
-    from unittest.mock import AsyncMock
-
-    from app.services.monthly_data_collection_service import (
-        MonthlyDataCollectionService,
-    )
-    from app.utils.cache_keys import monthly_search_key
-
-    month = (date.today().replace(day=1) + timedelta(days=32)).replace(day=1)
-    analyzer = SimpleNamespace(
-        amadeus_service=SimpleNamespace(source="demo"),
-        get_monthly_cheapest_dates=AsyncMock(
-            return_value={
-                "success": True,
-                "data": {"total_regions": 6, "searched_at": "now", "cache_saved": True},
-            }
-        ),
-    )
-    service = MonthlyDataCollectionService(analyzer=analyzer)
-    result = service.collect_monthly_data_sync(month.year, month.month, "PUS")
-    assert result["regions_collected"] == 6 and result["cache_saved"]
-    analyzer.get_monthly_cheapest_dates.assert_awaited_once_with(
-        month.year, month.month, origin="PUS", force_refresh=True
-    )
-    assert not service.is_month_data_available(month.year, month.month, "PUS")
-    key = monthly_search_key(
-        MonthlySearchRequest(year=month.year, month=month.month, origin="PUS"), "demo"
-    )
-    service.cache_service.set_cache(key, {})
-    assert service.is_month_data_available(month.year, month.month, "PUS")
-    assert service.cleanup_expired_cache()["cache_type"] == "memory"
-    assert service.get_collection_statistics()["cache_type"] == "memory"
 
 
 def test_oneway_cache_real_route_and_duration(monkeypatch):

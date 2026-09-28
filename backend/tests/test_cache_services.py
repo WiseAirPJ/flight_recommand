@@ -167,62 +167,75 @@ def test_redis_health_checks_use_distinct_keys_and_verify_contents(redis_cache):
 
 
 def test_refresh_skips_only_matching_source_and_origin(monkeypatch):
-    from app.tasks.monthly_data_collection import collect_monthly_cheapest_data
+    from app.services.monthly_search_service import MonthlySearchService
 
-    monkeypatch.setattr(settings, "ENABLE_DUMMY_FALLBACK", True)
-    dispatch = Mock(return_value=SimpleNamespace(id="task-id"))
-    monkeypatch.setattr(collect_monthly_cheapest_data, "delay", dispatch)
-    cache = CacheService()
-    service = CacheRefreshService(cache)
+    enqueue = Mock()
+    store = MonthlySearchService(source="demo", enqueue=enqueue)
+    service = CacheRefreshService(store)
     months = service._get_months_to_refresh()
     year, month = months[0]
     request = MonthlySearchRequest(year=year, month=month, origin="PUS")
-    cache.set_cache(monthly_search_key(request, "demo"), {})
-    result = service.refresh_cache(origin="PUS")
-    assert result["success"]
-    dispatch.assert_called_once_with(*months[1], "PUS")
-    dispatch.reset_mock()
+    store.request(request)
+    key, token = enqueue.call_args.args
+    store.claim(key, token)
+    store.complete(key, token, {"success": True, "data": {"regions": {}}})
+    enqueue.reset_mock()
+    assert service.refresh_cache(origin="PUS")["success"]
+    assert enqueue.call_count == 1
+    enqueue.reset_mock()
     service.refresh_cache(origin="PUS", force_update=True)
-    assert dispatch.call_args_list == [call(y, m, "PUS") for y, m in months]
-    dispatch.reset_mock()
+    # The next month is already pending; force refresh must still deduplicate it.
+    assert enqueue.call_count == 1
+    enqueue.reset_mock()
     service.refresh_cache(origin="CJJ")
-    assert dispatch.call_count == 2
-    dispatch.reset_mock()
-    monkeypatch.setattr(settings, "ENABLE_DUMMY_FALLBACK", False)
-    service.refresh_cache(origin="PUS")
-    assert dispatch.call_count == 2
+    assert enqueue.call_count == 2
+    enqueue.reset_mock()
+    CacheRefreshService(
+        MonthlySearchService(source="amadeus_test", enqueue=enqueue)
+    ).refresh_cache(origin="PUS")
+    assert enqueue.call_count == 2
 
 
 def test_warmup_and_refresh_cross_year_boundary(monkeypatch):
     from app.services import cache_refresh_service
-    from app.tasks.monthly_data_collection import collect_monthly_cheapest_data
 
+    class FixedDate(datetime):
+        @classmethod
+        def today(cls):
+            return cls(2026, 12, 20)
+
+    monkeypatch.setattr("app.models.flight_requests.date", FixedDate)
     fake_datetime = Mock()
     fake_datetime.now.return_value = datetime(2026, 12, 20)
     monkeypatch.setattr(cache_refresh_service, "datetime", fake_datetime)
     monkeypatch.setattr(settings, "COLLECTION_ORIGINS", ["ICN", "PUS", "CJJ"])
-    dispatch = Mock(return_value=SimpleNamespace(id="task-id"))
-    monkeypatch.setattr(collect_monthly_cheapest_data, "delay", dispatch)
-    service = CacheRefreshService()
+    store = Mock()
+    store.request.return_value = {
+        "success": True,
+        "enqueued": True,
+        "data": {"job_id": "task-id"},
+    }
+    service = CacheRefreshService(store)
     assert service._get_months_to_refresh() == [(2026, 12), (2027, 1)]
     result = service.warmup_cache(months_ahead=3)
     assert result["success"]
-    assert dispatch.call_args_list == [
-        call(year, month, origin)
+    assert [
+        (c.args[0].year, c.args[0].month, c.args[0].origin)
+        for c in store.request.call_args_list
+    ] == [
+        (year, month, origin)
         for year, month in [(2026, 12), (2027, 1), (2027, 2)]
         for origin in ["ICN", "PUS", "CJJ"]
     ]
 
 
-def test_dispatch_failure_is_reported(monkeypatch):
-    from app.tasks.monthly_data_collection import collect_monthly_cheapest_data
+def test_dispatch_failure_is_reported():
+    from app.services.monthly_search_service import MonthlySearchService
 
-    monkeypatch.setattr(
-        collect_monthly_cheapest_data,
-        "delay",
-        Mock(side_effect=RuntimeError("broker unavailable")),
+    store = MonthlySearchService(
+        source="demo", enqueue=Mock(side_effect=RuntimeError("broker unavailable"))
     )
-    service = CacheRefreshService()
+    service = CacheRefreshService(store)
     assert not service.refresh_cache()["success"]
     assert not service.warmup_cache()["success"]
 
@@ -319,6 +332,14 @@ def test_refresh_routes_use_scheduler_dependency(monkeypatch):
             )
             assert response.status_code == 200
             scheduler.warmup_cache.assert_called_once_with(regions=None, months_ahead=2)
+            scheduler.warmup_cache.return_value = {
+                "success": False,
+                "message": "unavailable",
+                "data": {},
+            }
+            assert (
+                client.post("/api/v1/cache/warmup", headers=headers).status_code == 503
+            )
             scheduler.refresh_cache.return_value = {
                 "success": False,
                 "message": "broker unavailable",

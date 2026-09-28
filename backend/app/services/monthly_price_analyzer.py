@@ -1,5 +1,6 @@
 """Sampled monthly fares, using the same provider/conditions as individual searches."""
 
+import asyncio
 import calendar
 from datetime import date, datetime, timedelta, timezone
 
@@ -40,6 +41,9 @@ class MonthlyPriceAnalyzer:
         currency="KRW",
         non_stop=False,
         force_refresh=False,
+        progress=None,
+        save_progress=None,
+        heartbeat=None,
     ):
         request = MonthlySearchRequest(
             year=target_year,
@@ -52,12 +56,35 @@ class MonthlyPriceAnalyzer:
         )
         source = self.amadeus_service.source
         key = monthly_search_key(request, source)
-        cached = None if force_refresh else self.cache_service.get_cache(key)
+        cached = (
+            None
+            if force_refresh
+            else await asyncio.to_thread(self.cache_service.get_cache, key)
+        )
         if cached is not None:
             cached["data"]["from_cache"] = True
             return cached
         dates = self._get_search_dates(request.year, request.month)
-        regions, failures, searches = {}, 0, 0
+        if progress is not None:
+            started = progress.get("started_at")
+            now = datetime.now(timezone.utc)
+            expired = (
+                not started
+                or (now - datetime.fromisoformat(started)).total_seconds()
+                >= settings.MONTHLY_CACHE_TTL
+            )
+            if progress.get("day") != date.today().isoformat() or expired:
+                progress.clear()
+                progress.update(
+                    day=date.today().isoformat(), started_at=now.isoformat(), quotes={}
+                )
+            progress.setdefault("dates", [day.isoformat() for day in dates])
+            dates = [
+                date.fromisoformat(day)
+                for day in progress["dates"]
+                if day > date.today().isoformat()
+            ]
+        regions, failures, searches, history_failures = {}, 0, 0, 0
         for region_id, region in self.japan_regions.items():
             options = []
             # Scope is explicitly listed: representative airports plus Tokyo Haneda.
@@ -67,7 +94,9 @@ class MonthlyPriceAnalyzer:
             for destination in destinations:
                 for departure in dates:
                     return_date = departure + timedelta(days=request.duration_days - 1)
-                    result = await self.amadeus_service.search_flight_offers(
+                    if heartbeat:
+                        await heartbeat()
+                    conditions = dict(
                         origin=request.origin,
                         destination=destination,
                         departure_date=departure.isoformat(),
@@ -76,6 +105,31 @@ class MonthlyPriceAnalyzer:
                         currency=request.currency,
                         non_stop=request.non_stop,
                     )
+                    quote_key = f"{destination}:{departure.isoformat()}"
+                    result = (
+                        progress["quotes"].get(quote_key)
+                        if progress is not None
+                        else None
+                    )
+                    if result is None:
+                        result = await self.amadeus_service.search_flight_offers(
+                            **conditions
+                        )
+                    elif (
+                        source == "amadeus"
+                        and result.get("data")
+                        and not result.get("meta", {}).get("history_saved")
+                    ):
+                        await self.amadeus_service.save_history(result, **conditions)
+                    if progress is not None and result.get("success"):
+                        progress["quotes"][quote_key] = result
+                        await save_progress(progress)
+                    if (
+                        source == "amadeus"
+                        and result.get("data")
+                        and not result.get("meta", {}).get("history_saved")
+                    ):
+                        history_failures += 1
                     searches += 1
                     if not result["success"]:
                         failures += 1
@@ -115,7 +169,7 @@ class MonthlyPriceAnalyzer:
                     "region_name": region["name"],
                     "airport": options[0]["airport"],
                     "cheapest_option": options[0],
-                    "all_options": options[:5],
+                    "all_options": options if progress is not None else options[:5],
                     "price_statistics": {
                         "min_price": min(prices),
                         "max_price": max(prices),
@@ -134,7 +188,8 @@ class MonthlyPriceAnalyzer:
                 "from_cache": False,
                 "source": source,
                 "is_demo": source == "demo",
-                "partial": failures > 0,
+                "partial": failures > 0 or history_failures > 0,
+                "history_failures": history_failures,
                 "failed_searches": failures,
                 "total_searches": searches,
                 "price_basis": "total_for_all_adults",
@@ -153,10 +208,15 @@ class MonthlyPriceAnalyzer:
                 status_code=503 if source == "unavailable" else 502,
                 message="항공권 공급자 조회에 실패했습니다.",
             )
-        result["data"]["cache_saved"] = not failures
-        if result["success"] and not failures:
-            result["data"]["cache_saved"] = self.cache_service.set_cache(
-                key, result, settings.MONTHLY_CACHE_TTL
+        result["data"]["cache_saved"] = False
+        if (
+            result["success"]
+            and not failures
+            and not history_failures
+            and progress is None
+        ):
+            result["data"]["cache_saved"] = await asyncio.to_thread(
+                self.cache_service.set_cache, key, result, settings.MONTHLY_CACHE_TTL
             )
         return result
 

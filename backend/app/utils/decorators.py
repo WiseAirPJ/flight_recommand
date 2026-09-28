@@ -1,4 +1,4 @@
-from copy import deepcopy
+import asyncio
 from functools import wraps
 from typing import Any, Callable, Dict, Optional
 
@@ -21,7 +21,7 @@ def cached_response(
 
             cache_key = cache_key_func(*args, **kwargs)
 
-            cached_result = deepcopy(cache_svc.get_cache(cache_key))
+            cached_result = await asyncio.to_thread(cache_svc.get_cache, cache_key)
             if cached_result:
                 if isinstance(cached_result, dict) and isinstance(
                     cached_result.get("data"), dict
@@ -40,7 +40,9 @@ def cached_response(
                 and result.get("success")
                 and not result.get("meta", {}).get("failed_searches")
             ):
-                cache_svc.set_cache(cache_key, result, ttl_seconds)
+                await asyncio.to_thread(
+                    cache_svc.set_cache, cache_key, result, ttl_seconds
+                )
 
             return result
 

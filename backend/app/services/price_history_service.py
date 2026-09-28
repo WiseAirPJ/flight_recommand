@@ -1,7 +1,12 @@
 """Persist provider observations, never demo or test-environment prices."""
 
+import hashlib
+import json
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.database import SessionLocal
 from app.db_models.price_observation import PriceObservation
@@ -44,6 +49,24 @@ class PriceHistoryService:
             itineraries = offer.get("itineraries", [])
             observations.append(
                 PriceObservation(
+                    observation_key=hashlib.sha256(
+                        json.dumps(
+                            [
+                                timestamp.isoformat(),
+                                origin,
+                                destination,
+                                departure_date,
+                                return_date,
+                                adults,
+                                currency,
+                                source,
+                                non_stop,
+                                offer,
+                            ],
+                            sort_keys=True,
+                            default=str,
+                        ).encode()
+                    ).hexdigest(),
                     observed_at=timestamp,
                     origin=origin,
                     destination=destination,
@@ -73,6 +96,19 @@ class PriceHistoryService:
             )
         if observations:
             with self.session_factory() as session:
-                session.add_all(observations)
+                for observation in observations:
+                    try:
+                        with session.begin_nested():
+                            session.add(observation)
+                            session.flush()
+                    except IntegrityError:
+                        existing = session.scalar(
+                            select(PriceObservation.id).where(
+                                PriceObservation.observation_key
+                                == observation.observation_key
+                            )
+                        )
+                        if existing is None:
+                            raise
                 session.commit()
         return len(observations)
