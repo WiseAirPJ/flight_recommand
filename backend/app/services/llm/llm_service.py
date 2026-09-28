@@ -682,7 +682,7 @@ class LLMService:
                 "service_type": "llm",
                 "cache_backend": "CacheService",
                 "ttl_seconds": self.cache_ttl,
-                "cache_service_stats": "Use CacheService.get_cache_statistics() for detailed stats",
+                "cache_service_stats": "Use CacheAdminService.get_cache_statistics() for detailed stats",
             }
         except Exception as e:
             logger.error(f"캐시 통계 조회 실패: {e}")

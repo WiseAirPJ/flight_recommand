@@ -210,14 +210,14 @@ class HolidayCacheService:
         try:
             if year:
                 cache_key = f"holidays:{year}"
-                await self.cache_service.delete_cache_key(cache_key)
+                self.cache_service.delete_cache(cache_key)
                 logger.info(f"Cleared holiday cache for {year}")
             else:
                 # 패턴으로 모든 공휴일 캐시 삭제
                 # Redis에서 keys 패턴 사용 (실제 구현시 scan 사용 권장)
                 for year_to_clear in range(2020, 2030):  # 범위 제한
                     cache_key = f"holidays:{year_to_clear}"
-                    await self.cache_service.delete_cache_key(cache_key)
+                    self.cache_service.delete_cache(cache_key)
 
                 logger.info("Cleared all holiday cache")
 
