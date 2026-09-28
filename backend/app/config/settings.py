@@ -1,131 +1,104 @@
-from pathlib import Path
-from typing import List, Optional
+"""One settings object shared by the API, worker and database layer."""
 
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings
+import secrets
+from typing import Optional
+
+from pydantic import Field, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # 기본 설정
-    APP_NAME: str = Field(default="지능형 일본 항공권 분석기")
-    VERSION: str = Field(default="0.2.0")
-    DEBUG: bool = Field(default=False)
-    ENVIRONMENT: str = Field(default="development")
-
-    EFFICIENCY_SCORE_CACHE_TTL: int = Field(default=3600, description="효율성 점수 캐시 TTL")
-    MAX_FLIGHTS_PER_ANALYSIS: int = Field(default=10, description="한 번에 분석할 최대 항공편 수")
-
-    # Amadeus API 설정
-    AMADEUS_CLIENT_ID: Optional[str] = Field(
-        default=None, description="Amadeus 클라이언트 ID"
-    )
-    AMADEUS_CLIENT_SECRET: Optional[str] = Field(
-        default=None, description="Amadeus 클라이언트 시크릿"
-    )
-    AMADEUS_BASE_URL: str = Field(default="https://test.api.amadeus.com")
-    AMADEUS_HOSTNAME: str = Field(default="test")
-
-    # Azure OpenAI 설정
-    AZURE_OPENAI_API_KEY: Optional[str] = Field(default=None)
-    AZURE_OPENAI_ENDPOINT: Optional[str] = Field(default=None)
-    AZURE_OPENAI_API_VERSION: str = Field(default="2025-04-01-preview")
-    AZURE_OPENAI_DEPLOYMENT_NAME: str = Field(default="gpt-4.1")
-    AZURE_OPENAI_MODEL: str = Field(default="gpt-4.1")
-    AZURE_OPENAI_MAX_TOKENS: int = Field(default=4000)
-
-    # OpenAI 설정
-    OPENAI_API_KEY: Optional[str] = Field(default=None)
-
-    # Anthropic 설정
-    ANTHROPIC_API_KEY: Optional[str] = Field(default=None)
-
-    # LLM 서비스 설정
-    LLM_PROVIDER: str = Field(
-        default="openai", description="LLM 제공자 (openai, azure_openai, anthropic)"
-    )
-    LLM_MODEL: str = Field(default="gpt-4o-mini", description="사용할 LLM 모델")
-    LLM_MAX_TOKENS: int = Field(default=4000, description="최대 토큰 수")
-    LLM_TEMPERATURE: float = Field(default=0.7, description="LLM 온도 설정")
-
-    KOREAEXIM_API_KEY: Optional[str] = Field(default=None, description="한국수출입은행 API 키")
-    KOREAEXIM_BASE_URL: str = Field(
-        default="https://oapi.koreaexim.go.kr", description="한국수출입은행 API 기본 URL"
-    )
-
-    # 데이터베이스 설정
-    DATABASE_URL: Optional[str] = Field(default=None)
-    DATABASE_ECHO: bool = Field(default=False)
-
-    # Azure 데이터베이스 설정
-    AZURE_DB_HOST: Optional[str] = Field(default=None)
-    AZURE_DB_NAME: Optional[str] = Field(default=None)
-    AZURE_DB_USER: Optional[str] = Field(default=None)
-    AZURE_DB_PASSWORD: Optional[str] = Field(default=None)
-    AZURE_DB_PORT: Optional[str] = Field(default=None)
-    AZURE_DB_SSLMODE: Optional[str] = Field(default=None)
-
-    # Amadeus 추가 설정
-    USE_REAL_AMADEUS: bool = Field(default=False)
-    ENABLE_DUMMY_FALLBACK: bool = Field(default=True)
-
-    REDIS_HOST: Optional[str] = Field(default=None, description="Redis 호스트 ")
-    REDIS_PORT: Optional[str] = Field(default=None, description="Redis 포트")
-    REDIS_USERNAME: Optional[str] = Field(default=None, description="Redis 사용자명")
-    REDIS_PASSWORD: Optional[str] = Field(default=None, description="Redis 비밀번호")
-
-    # Celery 설정
-    CELERY_BROKER_URL: Optional[str] = Field(default=None, description="Celery 브로커 URL")
-    CELERY_RESULT_BACKEND: Optional[str] = Field(
-        default=None, description="Celery 결과 백엔드"
-    )
-
+    APP_NAME: str = "일본 항공권 지도"
+    VERSION: str = "0.3.0"
+    DEBUG: bool = False
+    ENVIRONMENT: str = "development"
+    LOG_LEVEL: str = "INFO"
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:8000"]
+    DATABASE_URL: str = "sqlite:///./flights.db"
+    DATABASE_ECHO: bool = False
+    INIT_DB_ON_STARTUP: bool = True
     SECRET_KEY: str = Field(
-        default="@VQC2PP$^#Ozbu6suJLoLq03ay1CVyMi$%XRdO9QH7qgEc!C$M14owWA3z!uS1NJ",
-        min_length=32,
-        description="보안 키 (환경변수 필수 - 프로덕션 환경에서는 반드시 설정)",
+        default_factory=lambda: secrets.token_urlsafe(48), min_length=32
     )
-    ALGORITHM: str = Field(default="HS256")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30)
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ADMIN_API_KEY: Optional[str] = None
+    ENABLE_EXPERIMENTAL_FEATURES: bool = False
 
-    # CORS 설정
-    ALLOWED_ORIGINS: List[str] = Field(
-        default=["http://localhost:3000", "http://localhost:8000"]
+    REDIS_URL: Optional[str] = None
+    REDIS_HOST: Optional[str] = None
+    REDIS_PORT: int = 6379
+    REDIS_USERNAME: Optional[str] = None
+    REDIS_PASSWORD: Optional[str] = None
+    CELERY_BROKER_URL: str = "redis://localhost:6379/1"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
+    COLLECTION_ORIGINS: list[str] = [
+        "ICN",
+        "GMP",
+        "PUS",
+        "CJJ",
+        "TAE",
+        "CJU",
+        "MWX",
+        "YNY",
+    ]
+    MONTHLY_SAMPLE_STEP: int = Field(3, ge=1, le=7)
+    MONTHLY_CACHE_TTL: int = Field(3600, ge=60)
+
+    AMADEUS_CLIENT_ID: Optional[str] = None
+    AMADEUS_CLIENT_SECRET: Optional[str] = None
+    AMADEUS_HOSTNAME: str = "test"
+    AMADEUS_BASE_URL: str = "https://test.api.amadeus.com"
+    USE_REAL_AMADEUS: bool = False
+    ENABLE_DUMMY_FALLBACK: bool = False
+    KOREAEXIM_API_KEY: Optional[str] = None
+    KOREAEXIM_BASE_URL: str = "https://oapi.koreaexim.go.kr"
+
+    OPENAI_API_KEY: Optional[str] = None
+    AZURE_OPENAI_API_KEY: Optional[str] = None
+    AZURE_OPENAI_ENDPOINT: Optional[str] = None
+    AZURE_OPENAI_API_VERSION: str = "2025-04-01-preview"
+    AZURE_OPENAI_DEPLOYMENT_NAME: str = "gpt-4.1"
+    AZURE_OPENAI_MODEL: str = "gpt-4.1"
+    AZURE_OPENAI_MAX_TOKENS: int = 4000
+    ANTHROPIC_API_KEY: Optional[str] = None
+    LLM_PROVIDER: str = "openai"
+    LLM_MODEL: str = "gpt-4o-mini"
+    LLM_MAX_TOKENS: int = 4000
+    LLM_TEMPERATURE: float = 0.7
+    EFFICIENCY_SCORE_CACHE_TTL: int = 3600
+    MAX_FLIGHTS_PER_ANALYSIS: int = 10
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
-    # 로깅 설정
-    LOG_LEVEL: str = Field(default="INFO")
+    @model_validator(mode="after")
+    def validate_runtime(self):
+        if self.USE_REAL_AMADEUS and not (
+            self.AMADEUS_CLIENT_ID and self.AMADEUS_CLIENT_SECRET
+        ):
+            raise ValueError("실제 검색에는 Amadeus API 키가 필요합니다.")
+        if self.is_production:
+            if "SECRET_KEY" not in self.model_fields_set:
+                raise ValueError("운영 환경의 SECRET_KEY를 설정하세요.")
+            if self.ENABLE_DUMMY_FALLBACK:
+                raise ValueError("운영 환경에서는 데모 데이터를 사용할 수 없습니다.")
+            if self.INIT_DB_ON_STARTUP:
+                raise ValueError("운영 환경에서는 마이그레이션을 사용하세요.")
+        return self
 
-    @field_validator("ALLOWED_ORIGINS", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v):
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",")]
-        return v
+    @property
+    def is_production(self):
+        return self.ENVIRONMENT == "production"
 
-    @field_validator("SECRET_KEY")
-    @classmethod
-    def validate_secret_key(cls, v):
-        if len(v) < 32:
-            raise ValueError("보안 키는 최소 32자 이상이어야 합니다.")
-        return v
+    @property
+    def is_development(self):
+        return self.ENVIRONMENT == "development"
 
-    @field_validator("AMADEUS_CLIENT_ID", "AMADEUS_CLIENT_SECRET")
-    @classmethod
-    def validate_amadeus_credentials(cls, v, info):
-        if info.data.get("USE_REAL_AMADEUS", False) and not v:
-            field_name = info.field_name
-            raise ValueError(f"실제 Amadeus 사용시 {field_name}가 필요합니다.")
-        return v
-
-    model_config = {
-        "env_file": ".env",
-        "env_file_encoding": "utf-8",
-        "case_sensitive": True,
-        "extra": "ignore",
-    }
+    @property
+    def is_testing(self):
+        return self.ENVIRONMENT in {"test", "testing"}
 
 
 settings = Settings()
-
-log_dir = Path("logs")
-log_dir.mkdir(exist_ok=True)

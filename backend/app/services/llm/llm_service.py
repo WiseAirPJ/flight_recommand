@@ -18,7 +18,7 @@ from app.services.cache_service import CacheService
 logger = logging.getLogger(__name__)
 
 
-class TrendDirection(Enum):
+class TrendDirection(str, Enum):
     UP = "up"
     DOWN = "down"
     STABLE = "stable"
@@ -245,7 +245,12 @@ class LLMService:
                 }
 
         except json.JSONDecodeError:
-            return {"success": False, "error": "응답 파싱 실패", "factors": [], "summary": ""}
+            return {
+                "success": False,
+                "error": "응답 파싱 실패",
+                "factors": [],
+                "summary": "",
+            }
 
     async def _get_dummy_analysis(self, flights_data: List[Dict]) -> Dict[str, Any]:
         """LLM 클라이언트가 없을 때 더미 분석 결과 반환"""
@@ -332,7 +337,7 @@ class LLMService:
             flight_id = flight.get("id")
             price_info = flight.get("price", {})
             current_price = (
-                price_info.get("total", 0) if isinstance(price_info, dict) else 0
+                float(price_info.get("total", 0)) if isinstance(price_info, dict) else 0
             )
 
             if flight_id:
@@ -358,7 +363,7 @@ class LLMService:
             flight_id = flight.get("id")
             price_info = flight.get("price", {})
             current_price = (
-                price_info.get("total", 0) if isinstance(price_info, dict) else 0
+                float(price_info.get("total", 0)) if isinstance(price_info, dict) else 0
             )
 
             if (
@@ -431,7 +436,9 @@ class LLMService:
             total_duration = itinerary.get("duration", "N/A")
 
             price_info = flight.get("price", {})
-            price = price_info.get("total", 0) if isinstance(price_info, dict) else 0
+            price = (
+                float(price_info.get("total", 0)) if isinstance(price_info, dict) else 0
+            )
             duration_minutes = self._parse_duration(total_duration)
             price_efficiency = (1 / price) * 1000 if price > 0 else 0
 
@@ -482,7 +489,26 @@ class LLMService:
             cache_key = self._get_cache_key(query, flight_data)
             cached_result = self._get_from_cache(cache_key)
             if cached_result:
-                return FlightAnalysis(**cached_result)
+                return FlightAnalysis(
+                    **{
+                        **cached_result,
+                        "price_trends": [
+                            PriceTrend(
+                                **{
+                                    **item,
+                                    "trend_direction": TrendDirection(
+                                        item["trend_direction"]
+                                    ),
+                                }
+                            )
+                            for item in cached_result["price_trends"]
+                        ],
+                        "route_analysis": [
+                            RouteAnalysis(**item)
+                            for item in cached_result["route_analysis"]
+                        ],
+                    }
+                )
 
             self._update_price_history(flight_data)
 
@@ -629,7 +655,7 @@ class LLMService:
             flight_id = flight.get("id")
             price_info = flight.get("price", {})
             current_price = (
-                price_info.get("total", 0) if isinstance(price_info, dict) else 0
+                float(price_info.get("total", 0)) if isinstance(price_info, dict) else 0
             )
 
             for alert in self.price_alerts:
@@ -656,7 +682,7 @@ class LLMService:
                 "service_type": "llm",
                 "cache_backend": "CacheService",
                 "ttl_seconds": self.cache_ttl,
-                "cache_service_stats": "Use CacheService.get_cache_statistics() for detailed stats"
+                "cache_service_stats": "Use CacheService.get_cache_statistics() for detailed stats",
             }
         except Exception as e:
             logger.error(f"캐시 통계 조회 실패: {e}")

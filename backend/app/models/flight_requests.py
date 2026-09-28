@@ -1,104 +1,104 @@
-from typing import Optional
+"""Search contracts shared by one-way, round-trip and monthly searches."""
 
-from pydantic import BaseModel, Field, field_validator
+from datetime import date
+from typing import Literal, Optional
 
-from app.utils.validators import (
-    validate_date_format,
-    validate_duration,
-    validate_passenger_count,
-)
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.utils.validators import validate_date_format, validate_iata_code
 
 
-class FlightSearchRequest(BaseModel):
-    """기본 항공편 검색 요청"""
+class RouteRequest(BaseModel):
+    origin: str
+    destination: str
 
-    origin: str = Field(..., description="출발지 IATA 코드")
-    destination: str = Field(..., description="도착지 IATA 코드")
-    departure_date: str = Field(..., description="출발 날짜 (YYYY-MM-DD)")
-    return_date: Optional[str] = Field(None, description="귀국 날짜 (YYYY-MM-DD)")
-    adults: int = Field(1, description="성인 승객 수", ge=1, le=9)
-    currency: str = Field("KRW", description="통화 코드")
+    @field_validator("origin", "destination")
+    @classmethod
+    def airport_code(cls, value):
+        return validate_iata_code(value.strip())
+
+    @model_validator(mode="after")
+    def different_airports(self):
+        if self.origin == self.destination:
+            raise ValueError("출발공항과 도착공항은 달라야 합니다.")
+        return self
+
+
+class FlightSearchRequest(RouteRequest):
+    departure_date: str
+    return_date: Optional[str] = None
+    adults: int = Field(1, ge=1, le=9)
+    currency: str = Field("KRW", pattern=r"^[A-Z]{3}$")
+    non_stop: bool = False
 
     @field_validator("departure_date", "return_date")
     @classmethod
-    def validate_dates(cls, v):
-        return validate_date_format(v) if v else v
+    def travel_date(cls, value):
+        return validate_date_format(value) if value else value
 
-    @field_validator("adults")
+    @field_validator("currency", mode="before")
     @classmethod
-    def validate_adults(cls, v):
-        return validate_passenger_count(v)
+    def currency_code(cls, value):
+        return value.strip().upper() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def return_after_departure(self):
+        if self.return_date and self.return_date < self.departure_date:
+            raise ValueError("귀국일은 출발일보다 빠를 수 없습니다.")
+        return self
 
 
-class FlightDurationSearchRequest(BaseModel):
-    """여행 기간 기반 검색 요청"""
+class OneWayFlightSearchRequest(FlightSearchRequest):
+    return_date: None = None
 
-    origin: str = Field("ICN", description="출발지 IATA 코드")
-    destination: str = Field(..., description="도착지 IATA 코드")
-    departure_date: str = Field(..., description="출발 날짜 (YYYY-MM-DD)")
-    duration_days: int = Field(..., description="여행 기간 (일수)", ge=2, le=30)
-    adults: int = Field(1, description="성인 승객 수", ge=1, le=9)
-    currency: str = Field("KRW", description="통화 코드")
+
+class FlightDurationSearchRequest(RouteRequest):
+    departure_date: str
+    duration_days: int = Field(..., ge=2, le=30)
+    adults: int = Field(1, ge=1, le=9)
+    currency: str = Field("KRW", pattern=r"^[A-Z]{3}$")
+    non_stop: bool = False
 
     @field_validator("departure_date")
     @classmethod
-    def validate_departure_date(cls, v):
-        return validate_date_format(v)
-
-    @field_validator("duration_days")
-    @classmethod
-    def validate_duration(cls, v):
-        return validate_duration(v)
-
-    @field_validator("adults")
-    @classmethod
-    def validate_adults(cls, v):
-        return validate_passenger_count(v)
+    def travel_date(cls, value):
+        return validate_date_format(value)
 
 
-class OneWayFlightSearchRequest(BaseModel):
-    """편도 항공편 검색 요청"""
-
-    origin: str = Field(..., description="출발지 IATA 코드")
-    destination: str = Field(..., description="도착지 IATA 코드")
-    departure_date: str = Field(..., description="출발 날짜 (YYYY-MM-DD)")
-    adults: int = Field(1, description="성인 승객 수", ge=1, le=9)
-    currency: str = Field("KRW", description="통화 코드")
+class CheapestDateRequest(RouteRequest):
+    departure_date: str
+    duration: Optional[int] = Field(None, ge=2, le=30)
+    flexibility_days: int = Field(7, ge=1, le=15)
+    trip_type: Literal["one-way", "round-trip"] = "round-trip"
+    adults: int = Field(1, ge=1, le=9)
+    currency: str = Field("KRW", pattern=r"^[A-Z]{3}$")
+    non_stop: bool = False
 
     @field_validator("departure_date")
     @classmethod
-    def validate_departure_date(cls, v):
-        return validate_date_format(v)
+    def travel_date(cls, value):
+        return validate_date_format(value)
 
-    @field_validator("adults")
+
+class MonthlySearchRequest(BaseModel):
+    year: int = Field(..., ge=2000, le=2100)
+    month: int = Field(..., ge=1, le=12)
+    origin: str = "ICN"
+    adults: int = Field(1, ge=1, le=9)
+    duration_days: int = Field(4, ge=2, le=30)
+    currency: str = Field("KRW", pattern=r"^[A-Z]{3}$")
+    non_stop: bool = False
+
+    @field_validator("origin")
     @classmethod
-    def validate_adults(cls, v):
-        return validate_passenger_count(v)
+    def airport_code(cls, value):
+        return validate_iata_code(value.strip())
 
-
-class CheapestDateRequest(BaseModel):
-    """최저가 날짜 검색 요청"""
-
-    origin: str = Field(..., description="출발지 IATA 코드")
-    destination: str = Field(..., description="도착지 IATA 코드")
-    departure_date: str = Field(..., description="기준 출발 날짜 (YYYY-MM-DD)")
-    duration: Optional[int] = Field(None, description="여행 기간 (일수)", ge=1, le=30)
-    flexibility_days: int = Field(7, description="날짜 유연성 (±일수)", ge=1, le=15)
-    trip_type: str = Field("round-trip", description="여행 유형 (one-way, round-trip)")
-
-    @field_validator("departure_date")
-    @classmethod
-    def validate_departure_date(cls, v):
-        return validate_date_format(v)
-
-    @field_validator("duration")
-    @classmethod
-    def validate_duration(cls, v):
-        return validate_duration(v, min_days=1) if v else v
-
-    @field_validator("trip_type")
-    @classmethod
-    def validate_trip_type(cls, v):
-        if v not in ["one-way", "round-trip"]:
-            raise ValueError("trip_type must be 'one-way' or 'round-trip'")
-        return v
+    @model_validator(mode="after")
+    def future_month(self):
+        today = date.today()
+        if (self.year, self.month) < (today.year, today.month):
+            raise ValueError("과거 월은 현재 항공권 검색에 사용할 수 없습니다.")
+        if self.year > today.year + 1:
+            raise ValueError("검색 가능한 연도 범위를 벗어났습니다.")
+        return self

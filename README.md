@@ -1,331 +1,101 @@
-# 🛫 지능형 일본 항공권 분석기
+# 일본 항공권 지도
 
-**일본 여행 항공권의 가격뿐만 아니라 가치를 분석하여 최적의 선택을 도와주는 AI 기반 서비스**
+출발공항과 여행 월을 선택하면 조회한 날짜 중 일본 지역별 최저 왕복 운임을 보여주는 서비스입니다. 이 저장소의 현재 구현 범위는 **백엔드 API**입니다. 지도 화면과 예약 연결은 후속 구현 대상입니다.
 
-[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115.14+-green.svg)](https://fastapi.tiangolo.com/)
-[![Redis](https://img.shields.io/badge/Redis-7.0+-red.svg)](https://redis.io/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+## 실행
 
-## 📋 목차
+Python 3.12를 사용합니다. 저장소 루트에서:
 
-- [🎯 프로젝트 개요](#-프로젝트-개요)
-- [✨ 주요 기능](#-주요-기능)
-- [🏗️ 시스템 아키텍처](#-시스템-아키텍처)
-- [🚀 빠른 시작](#-빠른-시작)
-- [📖 API 문서](#-api-문서)
-- [🛠️ 개발 환경](#-개발-환경)
-- [📊 개발 로드맵](#-개발-로드맵)
-- [🤝 기여하기](#-기여하기)
-
-## 🎯 프로젝트 개요
-
-### 문제 인식
-일본 여행 항공권 예약 시 사용자들이 직면하는 문제들:
-- 단순한 가격 비교만으로는 최적의 선택이 어려움
-- 시기별/시즌별 가격 변동 패턴을 파악하기 어려움
-- 환율 변동에 따른 실제 비용 계산의 복잡성
-- 다양한 항공사와 경로 옵션의 복잡한 비교 과정
-
-### 우리의 솔루션
-**"가격"뿐만 아니라 "가치"를 분석하는 AI 기반 항공권 분석 서비스**
-
-## ✨ 주요 기능
-
-### 🎯 **Phase 1: 핵심 기능 (완료 ✅)**
-- **🗾 지역별 항공편 검색**: 일본 6개 주요 지역 (홋카이도, 간토, 간사이, 중부, 규슈, 오키나와)
-- **📅 기간별 스마트 검색**: 3박4일, 4박5일 등 여행 기간별 최적 항공편 검색
-- **💰 최저가 날짜 검색**: 유연한 일정으로 최저가 여행 날짜 발견
-- **🎌 시즌/공휴일 정보**: 일본 공휴일과 시즌별 가격 영향 분석
-- **⚡ 고성능 캐싱**: Redis 기반 실시간 캐싱으로 빠른 응답 속도
-
-### 🚀 **Phase 2: AI 분석 기능 (완료 ✅)**
-- **🤖 LLM 기반 항공편 분석**:
-  - 가격 트렌드 분석 및 예측
-  - 경로 효율성 및 편의성 점수 계산
-  - 맞춤형 항공편 추천 생성
-- **🔔 실시간 가격 알림**:
-  - 사용자 설정 가격 하락 알림
-  - 새로운 항공편 출시 알림
-- **💱 환율 변환 서비스**:
-  - 한국수출입은행 API 연동
-  - 80+ 통화 지원 (USD, JPY, EUR, GBP 등)
-  - 실시간 환율 정보 및 과거 환율 조회
-  - 통화 변환 기능 (KRW ↔ 외화)
-  - 캐싱 시스템으로 빠른 응답
-
-### 🔮 **Phase 3: 가격 예측 (개발 중)**
-- **📈 ML 기반 가격 예측**: scikit-learn, XGBoost 활용한 항공료 예측
-- **📊 시계열 분석**: Amadeus API 기반 가격 패턴 분석
-- **🎯 최적 예약 시점 추천**: 언제 예약하면 가장 저렴한지 AI 추천
-- **🗄️ 데이터 수집 시스템**: 자동화된 가격 히스토리 수집
-
-## 🏗️ 시스템 아키텍처
-
-### 기술 스택
-- **Backend**: Python 3.12 + FastAPI + Pydantic
-- **외부 API**: Amadeus for Developers API, 한국수출입은행 환율 API
-- **AI/ML**: OpenAI GPT, scikit-learn, XGBoost (Phase 3)
-- **캐시**: Redis 7.0+
-- **작업 큐**: Celery + Redis
-- **모니터링**: 구조화된 로깅 (structlog)
-
-### 서비스 구성
-```
-┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐
-│     Frontend        │    │     Backend         │    │   External APIs     │
-│   (React/Next.js)   │───▶│   FastAPI Server    │───▶│   Amadeus API       │
-│                     │    │                     │    │   한국수출입은행 API │
-└─────────────────────┘    └─────────────────────┘    │   OpenAI API        │
-                                      │                └─────────────────────┘
-                                      ▼
-                           ┌─────────────────────┐
-                           │     Redis Cache     │
-                           │   + Celery Queue    │
-                           └─────────────────────┘
+```sh
+cd backend
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+cp ../.env.example .env
+uvicorn app.main:app --reload
 ```
 
-## 🚀 빠른 시작
+문서는 `http://localhost:8000/docs`, 상태 확인은 `/health`입니다. 기본값은 외부 항공권 API를 호출하지 않으며, 가격 검색은 공급자 미설정으로 503을 반환합니다. 로컬 예시 화면 개발에는 `.env`에서 `ENABLE_DUMMY_FALLBACK=true`를 설정하세요. 예시 응답은 `is_demo=true`이고 가격 이력에는 저장되지 않습니다.
 
-### 1. 시스템 요구사항
-- **Python**: 3.12 이상
-- **Redis**: 7.0 이상
-- **메모리**: 최소 2GB RAM
-- **디스크**: 최소 1GB 여유 공간
+실제 공급자 연결에는 `USE_REAL_AMADEUS=true`와 Amadeus 자격 증명이 필요합니다. `AMADEUS_HOSTNAME=test`의 데이터도 실제 운임 이력에서 제외됩니다. 운영 공급자 관측값 저장은 `AMADEUS_HOSTNAME=production`에서만 이루어집니다. KRW 표시에는 한국수출입은행 환율 키도 필요합니다. 환율을 얻지 못하면 외화를 원화로 바꿔 표시하지 않고 조회 실패를 반환합니다. 원화는 JPY 운임을 환산한 **참고 가격**이며 원본 운임과 환율 기준일도 보존합니다.
 
-### 2. 설치 및 실행
+## 화면에서 사용할 API
 
-```bash
-# 저장소 클론
-git clone https://github.com/WiseAirPJ/flight_recommand.git
-cd flight_recommand/backend
+| 용도 | API |
+| --- | --- |
+| 국내 출발공항 선택 | `GET /api/v1/regions/departure-airports` |
+| 일본 지역·지도 좌표 | `GET /api/v1/regions/` |
+| 선택한 월의 지도 가격 | `GET /api/v1/regions/lowest-prices?origin=PUS&year=2027&month=1&adults=1&duration_days=4&currency=KRW` |
+| 지역별 상위 날짜 후보 | `GET /api/v1/regions/monthly-analysis/2027/1?origin=PUS` |
+| 상세 왕복·편도 검색 | `POST /api/v1/flights/search` |
+| 편도 전용 검색 | `POST /api/v1/flights/search-oneway` |
+| 3박 4일 등 기간 검색 | `POST /api/v1/flights/search-by-duration` |
+| 기준일 전후 최저가 | `POST /api/v1/flights/cheapest-dates` |
 
-# 가상환경 생성 및 활성화
-python -m venv venv
-source venv/bin/activate  # Linux/macOS
-# 또는 venv\\Scripts\\activate  # Windows
+예시 날짜는 현재 이후로 바꿔 사용하세요. `POST /api/v1/regions/monthly-analysis`는 `year`, `month`, `origin`, `adults`, `duration_days`, `currency`, `non_stop`을 받습니다. 새 계약은 `duration_days`를 사용하며 기존 GET 월별 API의 `duration`은 호환 별칭으로 유지합니다. 두 값이 다르면 422를 반환합니다.
 
-# 의존성 설치
-pip install -r requirements.txt
+가격은 **입력한 성인 전체의 왕복 합계**입니다. `duration_days=4`는 출발일부터 귀국일까지 4일(3박)입니다. 수하물 추가요금을 임의로 더하지 않으며 제공된 항공사 운임 조건을 확인해야 합니다.
 
-# Redis 실행 (별도 터미널)
-redis-server
+기본 월별 검색은 3일 간격으로 출발일을 조회하고 CTS/NRT/HND/KIX/NGO/FUK/OKA를 비교합니다. 모든 일본 공항·날짜·항공사를 포괄하는 최저가가 아닙니다. 화면에는 “조회한 날짜 중 최저가”로 표시하고, `meta.sampled_dates`, `searched_airports`, `source`, `partial`, `failed_searches`, 가격의 `observed_at`을 사용하세요. 결과가 없는 지역은 가격 없음으로 표시합니다. 나리타보다 하네다가 저렴하면 하네다 결과를 표시합니다. 출발공항 목록은 운항 노선을 보장하지 않습니다.
 
-# 환경변수 설정
-cp .env .env
-# .env 파일을 편집하여 필요한 API 키들을 설정
+## 구조와 실행 흐름
 
-# 서버 시작
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```text
+backend/app/main.py                      앱 시작·라우터·오류 처리·관리자 보호
+  api/v1/regions.py                      지도·월별 검색 입력
+    services/monthly_price_analyzer.py   날짜와 공항별 검색, 최저가 선택
+      services/amadeus_service.py       개별·월별 검색 공통 공급자 경로
+        services/exchange_rate_service.py   통화 환산
+        services/price_history_service.py   실제 관측값 저장
+  models/                               API 입력·응답 모델
+  db_models/                            SQLAlchemy 저장 모델
+  core/database.py                      공통 연결·세션
+  tasks/celery_app.py                    유일한 Celery 앱
+  tasks/monthly_data_collection.py       같은 월별 분석기를 사용하는 수집 작업
+backend/alembic/                        DB 변경 이력
 ```
 
-### 3. API 문서 확인
-서버 실행 후 브라우저에서 접속:
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-- **헬스 체크**: http://localhost:8000/health
+`app/config/settings.py`가 유일한 설정 소스입니다. `app/core/config.py`는 기존 인프라 코드용 재노출입니다. Redis가 없으면 같은 API 프로세스 안에서만 메모리 캐시를 공유합니다. 검색 캐시에는 출발·도착공항, 날짜, 인원, 통화, 직항 조건, 공급자 구분이 반영됩니다.
 
-## 📖 API 문서
+`price_observations`는 조회 시각, 여행 날짜, 출발·도착공항, 인원, 통화, 총운임, 원본 운임·환율, 수하물 관련 공급자 조건을 저장합니다. **작년 최저 월 통계나 예측을 제공하는 단계는 아닙니다.** 충분한 실제 관측과 비교 기준이 확보된 후 별도 집계가 필요합니다. 사용자·추천·기존 가격 테이블은 인프라 브랜치에서 보존했지만 현재 검색 경로는 관측 테이블을 사용합니다.
 
-### 🎯 핵심 API 엔드포인트
+## 데이터베이스와 자동 수집
 
-#### 지역 관리
-- `GET /api/v1/regions` - 일본 지역 목록 조회
-- `GET /api/v1/regions/lowest-prices` - 지역별 최저가 조회 (메인 화면용)
-- `GET /api/v1/regions/{region_id}/airports` - 지역별 공항 목록
+개발 환경에서는 시작 시 SQLite 테이블을 생성합니다. 운영 환경에서는 `INIT_DB_ON_STARTUP=false`로 설정하고 새 데이터베이스에 다음을 실행합니다:
 
-#### 항공편 검색
-- `POST /api/v1/flights/search` - 기본 항공편 검색
-- `POST /api/v1/flights/search-by-duration` - 기간별 항공편 검색
-- `POST /api/v1/flights/cheapest-dates` - 최저가 날짜 검색
-
-#### AI 분석 (Phase 2)
-- `POST /api/v1/llm/analyze` - 고급 항공편 분석
-- `POST /api/v1/llm/price-alerts` - 가격 알림 설정
-- `GET /api/v1/llm/exchange-rates` - 환율 정보 조회
-- `POST /api/v1/llm/currency-conversion` - 통화 변환
-
-#### 유틸리티
-- `GET /api/v1/utils/date-info` - 날짜/공휴일/시즌 정보
-- `GET /api/v1/utils/airports/search` - 공항 검색 (자동완성)
-- `GET /api/v1/cache/status` - 캐시 상태 조회
-
-### 📝 API 사용 예시
-
-```bash
-# 지역별 최저가 조회
-curl -X GET \"http://localhost:8000/api/v1/regions/lowest-prices\"
-
-# 4박5일 여행 검색
-curl -X POST \"http://localhost:8000/api/v1/flights/search-by-duration\" \\
-  -H \"Content-Type: application/json\" \\
-  -d '{
-    \"origin\": \"ICN\",
-    \"destination_region\": \"kanto\",
-    \"departure_date\": \"2025-08-15\",
-    \"trip_duration\": 5,
-    \"adults\": 2
-  }'
-
-# 환율 변환
-curl -X POST \"http://localhost:8000/api/v1/llm/currency-conversion\" \\
-  -H \"Content-Type: application/json\" \\
-  -d '{
-    \"amount\": 500000,
-    \"from_currency\": \"KRW\",
-    \"to_currency\": \"JPY\"
-  }'
-
-# 현재 환율 조회
-curl -X GET \"http://localhost:8000/api/v1/llm/exchange-rates?currency_codes=USD,JPY,EUR\"
-
-# 과거 환율 조회
-curl -X GET \"http://localhost:8000/api/v1/llm/exchange-rates/historical?date=20250701&currency_codes=USD\"
+```sh
+alembic upgrade head
 ```
 
-## 🛠️ 개발 환경
+이미 테이블을 가진 DB에는 백업과 스키마 비교 없이 초기 마이그레이션을 적용하거나 stamp하지 마세요. 이번 초기 마이그레이션은 새 DB 기준입니다. PostgreSQL은 `DATABASE_URL=postgresql+psycopg2://...`로 설정합니다.
 
-### 개발 도구 설정
-```bash
-# 개발용 의존성 설치
-pip install -r requirements-dev.txt
+API와 worker에 동일한 DB·Redis·검색 설정을 제공한 뒤 별도 터미널에서 실행합니다:
 
-# 코드 포맷팅
-black app/ tests/
-isort app/ tests/
-
-# 린팅
-flake8 app/ tests/
-mypy app/
-
-# 테스트 실행
-pytest -v
-
-# 테스트 커버리지
-pytest --cov=app --cov-report=html
+```sh
+celery -A app.tasks.celery_app:celery_app worker -l info -Q monthly_analysis,daily_updates
+celery -A app.tasks.celery_app:celery_app beat -l info
 ```
 
-### 환경변수 설정
-```env
-# .env 파일 예시
-DEBUG=True
-ENVIRONMENT=development
+예약 수집은 `COLLECTION_ORIGINS`의 모든 출발공항을 대상으로 합니다. 8개 출발공항 × 7개 도착공항 × 월별 약 10~11개 날짜만으로도 월 한 번 조회에 수백 회 호출이 발생합니다. 공급자 요금·쿼터에 맞게 공항 목록과 샘플 간격을 설정한 뒤 수집기를 실행하세요. 메모리 캐시는 worker와 API 사이에 공유되지 않습니다.
 
-# Amadeus API
-AMADEUS_CLIENT_ID=your_amadeus_client_id
-AMADEUS_CLIENT_SECRET=your_amadeus_client_secret
+`/api/v1/cache/*`는 `ADMIN_API_KEY`를 설정해야 활성화되고 `X-Admin-Key` 헤더를 요구합니다. 갱신 작업은 현재 모든 일본 지역을 대상으로 합니다. 운영 환경은 별도의 지속적인 `SECRET_KEY`도 필요합니다.
 
-# OpenAI API (Phase 2)
-OPENAI_API_KEY=your_openai_api_key
+LLM·예측 코드는 보존하지만 `ENABLE_EXPERIMENTAL_FEATURES=false`가 기본값입니다. 켜더라도 관리자 인증이 필요합니다. 기존 알림·예측의 메모리 기반 구현은 사용자용 운영 기능으로 검증되지 않았습니다. 계정 인증·예약·실제 알림 발송도 이번 범위에 포함하지 않습니다.
 
-# 한국수출입은행 API (Phase 2)
-KOREAEXIM_API_KEY=your_koreaexim_api_key
+## 검증
 
-# Redis 설정
-REDIS_URL=redis://localhost:6379
+```sh
+pytest
+black --check app tests conftest.py alembic
+isort --check-only app tests conftest.py alembic
+flake8 app tests conftest.py alembic --select E9,F63,F7,F82 --show-source
+pytest --cov=app --cov-report=term-missing
 ```
 
-### 프로젝트 구조
-```
-backend/
-├── app/
-│   ├── api/v1/              # API 라우터
-│   │   ├── flights.py       # 항공편 API
-│   │   ├── regions.py       # 지역 API
-│   │   ├── llm.py          # AI 분석 API
-│   │   └── utils.py        # 유틸리티 API
-│   ├── services/           # 비즈니스 로직
-│   │   ├── amadeus_service.py
-│   │   ├── llm/            # LLM 서비스
-│   │   └── exchange_rate_service.py
-│   ├── models/             # 데이터 모델
-│   ├── config/             # 설정 관리
-│   └── utils/              # 유틸리티
-├── tests/                  # 테스트 코드
-└── requirements*.txt       # 의존성 파일
-```
+CI는 모든 테스트를 실행하고 전체 코드 커버리지를 보고합니다. 통합한 검색·환율·월별 분석·저장·수집 경로에는 80% 커버리지 기준을 실제로 적용합니다. 기존에는 전체 80% 설정이 있었지만 CI에서 pytest 자체를 실행하지 않았습니다. 아직 검증이 부족한 실험·관리 기능까지 전체 80%를 달성했다고 주장하지 않습니다.
 
-## 📊 개발 로드맵
+외부 공급자는 테스트에서 대체하고 DB는 격리된 SQLite를 사용합니다. 실제 Amadeus/환율 응답, PostgreSQL 서버, Redis/Celery 다중 프로세스 운영은 별도 통합 환경 검증이 필요합니다.
 
-### ✅ Phase 1: 핵심 기능 (완료)
-- [x] 기본 항공편 검색 API
-- [x] 지역별 항공편 조회
-- [x] 캐시 시스템 구축
-- [x] 날짜/시즌 정보 서비스
+## 브랜치 전략
 
-### ✅ Phase 2: AI 분석 기능 (완료)
-- [x] LLM 기반 항공편 분석
-- [x] 실시간 가격 알림 시스템
-- [x] 환율 변환 서비스
-- [x] 고급 추천 시스템
-
-### 🔄 Phase 3: 가격 예측 (개발 중)
-- [ ] Amadeus API 기반 데이터 수집 시스템
-- [ ] ML 파이프라인 구축 (scikit-learn, XGBoost)
-- [ ] 시계열 특성 엔지니어링
-- [ ] 예측 API 엔드포인트 구현
-
-### 🔮 Phase 4: 확장 기능 (계획 중)
-- [ ] 호텔 연동 서비스
-- [ ] 렌터카 연동 서비스
-- [ ] 사용자 개인화 기능
-- [ ] 모바일 앱 개발
-
-## 🤝 기여하기
-
-### 기여 방법
-1. **Fork** 저장소
-2. **Feature 브랜치** 생성 (`git checkout -b feature/amazing-feature`)
-3. **변경사항 커밋** (`git commit -m 'Add amazing feature'`)
-4. **브랜치에 Push** (`git push origin feature/amazing-feature`)
-5. **Pull Request** 생성
-
-### 개발 가이드라인
-- 코드 스타일: **PEP 8** 준수
-- 테스트: 새로운 기능에 대한 테스트 작성 필수
-- 문서: API 변경사항 문서 업데이트
-- 커밋: [Conventional Commits](https://www.conventionalcommits.org/) 형식 사용
-
-### 버그 리포트 및 기능 요청
-[GitHub Issues](https://github.com/WiseAirPJ/flight_recommand/issues)를 통해 버그 리포트나 기능 요청을 해주세요.
-
----
-
-## 📈 성능 지표
-
-### 현재 성능
-- **응답 시간**: 평균 200ms 이하
-- **캐시 적중률**: 85% 이상
-- **API 가용성**: 99.9% 이상
-- **동시 사용자**: 최대 1,000명 지원
-
-### 지원 범위
-- **항공편 검색**: 한국 ↔ 일본 노선
-- **지역 커버리지**: 일본 6개 주요 지역
-- **통화 지원**: 80+ 통화 (한국수출입은행 API 기반)
-- **언어 지원**: 한국어, 영어, 일본어
-
----
-
-## 📄 라이선스
-
-이 프로젝트는 MIT 라이선스 하에 있습니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
-
----
-
-## 🙋‍♀️ 문의
-
-프로젝트에 대한 질문이나 제안사항이 있으시면 언제든지 연락주세요:
-
-- **Email**: gucci9107@gmail.com
-- **GitHub Issues**: [이슈 페이지](https://github.com/WiseAirPJ/flight_recommand/issues)
-- **Documentation**: [개발자 가이드](DEVELOPMENT.md)
-
----
-
-<div align="center">
-
-**🛫 지능형 일본 항공권 분석기**
-
-
-</div>
+새 기능은 `feat/`, 구조 정리는 `refactor/`, 오류 수정은 `fix/`, 설정·유지보수는 `chore/`를 사용합니다. 현재 통합 브랜치는 `refactor/flight-search-integration`입니다. 기능 브랜치의 이력을 보존해 통합하며, `main` 반영은 검토 후 진행합니다.

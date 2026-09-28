@@ -1,3 +1,4 @@
+from copy import deepcopy
 from functools import wraps
 from typing import Any, Callable, Dict, Optional
 
@@ -20,9 +21,11 @@ def cached_response(
 
             cache_key = cache_key_func(*args, **kwargs)
 
-            cached_result = cache_svc.get_cache(cache_key)
+            cached_result = deepcopy(cache_svc.get_cache(cache_key))
             if cached_result:
-                if isinstance(cached_result, dict) and "data" in cached_result:
+                if isinstance(cached_result, dict) and isinstance(
+                    cached_result.get("data"), dict
+                ):
                     cached_result["data"]["from_cache"] = True
                 return {
                     "success": True,
@@ -32,7 +35,11 @@ def cached_response(
 
             result = await func(*args, **kwargs)
 
-            if isinstance(result, dict) and result.get("success"):
+            if (
+                isinstance(result, dict)
+                and result.get("success")
+                and not result.get("meta", {}).get("failed_searches")
+            ):
                 cache_svc.set_cache(cache_key, result, ttl_seconds)
 
             return result
@@ -50,6 +57,8 @@ def handle_exceptions(error_message: str = "처리 중 오류가 발생했습니
                 return await func(*args, **kwargs)
             except HTTPException:
                 raise
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e)) from e
             except Exception as e:
                 raise HTTPException(
                     status_code=500, detail=f"{error_message}: {str(e)}"

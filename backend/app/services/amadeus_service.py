@@ -1,387 +1,336 @@
+"""One quote path for map, date and individual flight searches."""
+
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from copy import deepcopy
+from datetime import date, datetime, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal
 
 from amadeus import Client, ResponseError
 
 from app.config.settings import settings
 from app.services.exchange_rate_service import ExchangeRateService
+from app.services.price_history_service import PriceHistoryService
 
 logger = logging.getLogger(__name__)
 
 
 class AmadeusService:
-    def __init__(self):
-        """Amadeus 클라이언트 초기화"""
-        if settings.AMADEUS_CLIENT_ID and settings.AMADEUS_CLIENT_SECRET:
+    def __init__(self, client=None, exchange_rate_service=None, history_service=None):
+        self.client = client
+        if client is None and settings.USE_REAL_AMADEUS:
             self.client = Client(
                 client_id=settings.AMADEUS_CLIENT_ID,
                 client_secret=settings.AMADEUS_CLIENT_SECRET,
                 hostname=settings.AMADEUS_HOSTNAME,
             )
-            self.is_active = True
-            logger.info("AmadeusService initialized with real API client")
-        else:
-            self.client = None
-            self.is_active = False
-            logger.warning(
-                "AmadeusService initialized in dummy mode - API keys not provided"
+        self.is_active = self.client is not None
+        self.exchange_rate_service = exchange_rate_service or ExchangeRateService()
+        self.history_service = history_service or PriceHistoryService()
+
+    @property
+    def source(self):
+        if self.is_active:
+            return (
+                "amadeus"
+                if settings.AMADEUS_HOSTNAME == "production"
+                else "amadeus_test"
             )
-
-        self.exchange_rate_service = ExchangeRateService()
-
-    async def search_cheapest_dates(
-        self,
-        origin: str,
-        destination: str,
-        departure_date: str,
-        duration: Optional[int] = None,
-        one_way: bool = False,
-    ) -> Dict[str, Any]:
-        """특정 구간의 최저가 날짜 검색"""
-        if not self.is_active:
-            return await self._get_dummy_cheapest_dates(
-                origin, destination, departure_date, duration, one_way
-            )
-
-        try:
-            logger.info(f"Searching cheapest dates: {origin} -> {destination}")
-            loop = asyncio.get_event_loop()
-
-            def _search():
-                params = {
-                    "origin": origin,
-                    "destination": destination,
-                    "departureDate": departure_date,
-                    "oneWay": one_way,
-                    "currency": "KRW",
-                    "maxPrice": 2000000,
-                }
-
-                if duration:
-                    params["duration"] = duration
-
-                return self.client.shopping.flight_dates.get(**params)
-
-            response = await loop.run_in_executor(None, _search)
-
-            if response.data:
-                return {
-                    "success": True,
-                    "data": response.data,
-                    "meta": getattr(response, "meta", {}),
-                }
-            else:
-                return {
-                    "success": False,
-                    "message": "검색 결과가 없습니다.",
-                    "data": [],
-                }
-
-        except ResponseError as error:
-            logger.error(f"Amadeus API 오류: {error}")
-            return {
-                "success": False,
-                "message": f"API 오류: {error.description}",
-                "data": [],
-            }
-        except Exception as error:
-            logger.error(f"예상치 못한 오류: {error}")
-            return {
-                "success": False,
-                "message": "서버 오류가 발생했습니다.",
-                "data": [],
-            }
+        return "demo" if settings.ENABLE_DUMMY_FALLBACK else "unavailable"
 
     async def search_flight_offers(
         self,
-        origin: str,
-        destination: str,
-        departure_date: str,
-        return_date: Optional[str] = None,
-        adults: int = 1,
-        currency: str = "KRW",
-    ) -> Dict[str, Any]:
-        """실시간 항공편 검색"""
+        origin,
+        destination,
+        departure_date,
+        return_date=None,
+        adults=1,
+        currency="KRW",
+        non_stop=False,
+    ):
+        timestamp = datetime.now(timezone.utc).isoformat()
         if not self.is_active:
-            return await self._get_dummy_flight_offers(
+            if not settings.ENABLE_DUMMY_FALLBACK:
+                return {
+                    "success": False,
+                    "data": [],
+                    "status_code": 503,
+                    "message": "항공권 검색 공급자가 설정되지 않았습니다.",
+                }
+            result = await self._get_dummy_flight_offers(
                 origin, destination, departure_date, return_date, adults, currency
             )
-
-        try:
-            logger.info(f"Searching flight offers: {origin} -> {destination}")
-
-            loop = asyncio.get_event_loop()
-
-            def _search():
-                # KRW 요청 시 JPY로 검색 후 변환
-                search_currency = "JPY" if currency == "KRW" else currency
-
-                params = {
-                    "originLocationCode": origin,
-                    "destinationLocationCode": destination,
-                    "departureDate": departure_date,
-                    "adults": adults,
-                    "currencyCode": search_currency,
-                    "max": 10,
-                }
-
-                if return_date:
-                    params["returnDate"] = return_date
-
-                return self.client.shopping.flight_offers_search.get(**params)
-
-            response = await loop.run_in_executor(None, _search)
-
-            if response.data:
-                data = response.data
-
-                # JPY로 검색했을 때 KRW로 변환
-                if currency == "KRW":
-                    data = await self._convert_prices_to_krw(data, "JPY")
-
-                return {
-                    "success": True,
-                    "data": data,
-                    "meta": getattr(response, "meta", {}),
-                    "dictionaries": getattr(response, "dictionaries", {}),
-                }
-            else:
-                return {
-                    "success": False,
-                    "message": "검색 결과가 없습니다.",
-                    "data": [],
-                }
-
-        except ResponseError as error:
-            logger.error(f"Amadeus API 오류: {error}")
-            return {
-                "success": False,
-                "message": f"API 오류: {error.description}",
-                "data": [],
+            result["meta"] = {
+                "source": "demo",
+                "is_demo": True,
+                "observed_at": timestamp,
             }
-        except Exception as error:
-            logger.error(f"예상치 못한 오류: {error}")
-            return {
-                "success": False,
-                "message": "서버 오류가 발생했습니다.",
-                "data": [],
-            }
-
-    async def get_airport_info(self, iata_code: str) -> Dict[str, Any]:
-        """공항 정보 조회"""
-        if not self.is_active:
-            return await self._get_dummy_airport_info(iata_code)
-
+            return result
         try:
-            logger.info(f"Getting airport info for: {iata_code}")
-
-            loop = asyncio.get_event_loop()
-
-            def _search():
-                return self.client.reference_data.locations.get(
-                    keyword=iata_code, subType="AIRPORT"
+            search_currency = "JPY" if currency == "KRW" else currency
+            params = {
+                "originLocationCode": origin,
+                "destinationLocationCode": destination,
+                "departureDate": departure_date,
+                "adults": adults,
+                "currencyCode": search_currency,
+                "max": 10,
+                "travelClass": "ECONOMY",
+                "nonStop": non_stop,
+            }
+            if return_date:
+                params["returnDate"] = return_date
+            response = await asyncio.to_thread(
+                self.client.shopping.flight_offers_search.get, **params
+            )
+            offers = deepcopy(response.data or [])
+            for offer in offers:
+                amount = Decimal(str(offer["price"]["total"]))
+                if not amount.is_finite() or amount <= 0:
+                    raise ValueError("유효하지 않은 항공권 가격")
+                if offer["price"].get("currency") != search_currency:
+                    raise ValueError("공급자 통화 불일치")
+            if offers and currency == "KRW":
+                offers = await self._convert_prices_to_krw(offers, "JPY")
+            if any(o.get("price", {}).get("currency") != currency for o in offers):
+                raise ValueError("요청한 통화와 검색 결과의 통화가 다릅니다.")
+            history_saved = False
+            try:
+                saved_count = await asyncio.to_thread(
+                    self.history_service.record_offers,
+                    offers,
+                    origin=origin,
+                    destination=destination,
+                    departure_date=departure_date,
+                    return_date=return_date,
+                    adults=adults,
+                    currency=currency,
+                    source=self.source,
+                    non_stop=non_stop,
+                    observed_at=datetime.fromisoformat(timestamp),
                 )
-
-            response = await loop.run_in_executor(None, _search)
-
-            if response.data:
-                return {
-                    "success": True,
-                    "data": response.data[0] if response.data else {},
-                }
-            else:
-                return {
-                    "success": False,
-                    "message": "공항 정보를 찾을 수 없습니다.",
-                    "data": {},
-                }
-
-        except ResponseError as error:
-            logger.error(f"Amadeus API 오류: {error}")
+                history_saved = saved_count > 0
+            except Exception:
+                history_saved = False
+                logger.exception("가격 이력 저장 실패")
+            return {
+                "success": True,
+                "data": offers,
+                "meta": {
+                    "source": self.source,
+                    "is_demo": False,
+                    "observed_at": timestamp,
+                    "history_saved": history_saved,
+                    "display_price_is_estimate": currency == "KRW",
+                    "price_basis": "total_for_all_adults",
+                },
+                "dictionaries": getattr(response, "dictionaries", {}),
+            }
+        except ResponseError:
+            logger.exception("Amadeus 검색 실패")
             return {
                 "success": False,
-                "message": f"API 오류: {error.description}",
-                "data": {},
+                "data": [],
+                "status_code": 502,
+                "message": "항공권 공급자 검색에 실패했습니다.",
             }
-        except Exception as error:
-            logger.error(f"예상치 못한 오류: {error}")
+        except Exception:
+            logger.exception("항공권 가격 처리 실패")
             return {
                 "success": False,
-                "message": "서버 오류가 발생했습니다.",
-                "data": {},
+                "data": [],
+                "status_code": 502,
+                "message": "항공권 가격을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.",
             }
 
-    async def _get_dummy_cheapest_dates(
+    async def search_cheapest_dates(
         self,
-        origin: str,
-        destination: str,
-        departure_date: str,
-        duration: Optional[int],
-        one_way: bool = False,
-    ) -> Dict[str, Any]:
-        """더미 최저가 날짜 데이터"""
-        dummy_data = {
-            "type": "flight-date",
-            "origin": origin,
-            "destination": destination,
-            "departureDate": departure_date,
-            "price": {"total": "180000" if one_way else "280000", "currency": "KRW"},
-        }
-
-        if not one_way:
-            dummy_data["returnDate"] = "2025-08-18"
-
+        origin,
+        destination,
+        departure_date,
+        duration=None,
+        one_way=False,
+        flexibility_days=7,
+        adults=1,
+        currency="KRW",
+        non_stop=False,
+    ):
+        center = date.fromisoformat(departure_date)
+        results, errors = [], 0
+        for offset in range(-flexibility_days, flexibility_days + 1):
+            departure = center + timedelta(days=offset)
+            if departure <= date.today():
+                continue
+            returning = (
+                None
+                if one_way
+                else (departure + timedelta(days=(duration or 4) - 1)).isoformat()
+            )
+            result = await self.search_flight_offers(
+                origin,
+                destination,
+                departure.isoformat(),
+                returning,
+                adults,
+                currency,
+                non_stop,
+            )
+            if not result["success"]:
+                errors += 1
+                continue
+            if result["data"]:
+                offer = min(result["data"], key=lambda o: Decimal(o["price"]["total"]))
+                results.append(
+                    {
+                        "origin": origin,
+                        "destination": destination,
+                        "departureDate": departure.isoformat(),
+                        "returnDate": returning,
+                        "price": offer["price"],
+                        "offer": offer,
+                    }
+                )
+        if not results and errors:
+            return {
+                "success": False,
+                "data": [],
+                "message": "날짜별 항공권 조회에 실패했습니다.",
+                "status_code": 502,
+            }
         return {
             "success": True,
-            "data": [dummy_data],
-            "meta": {"count": 1},
+            "data": sorted(results, key=lambda x: Decimal(x["price"]["total"])),
+            "meta": {
+                "source": self.source,
+                "is_demo": self.source == "demo",
+                "failed_searches": errors,
+            },
         }
 
+    async def get_airport_info(self, iata_code):
+        if not self.is_active:
+            return {
+                "success": True,
+                "data": {"iataCode": iata_code},
+                "meta": {"source": "local", "is_demo": False},
+            }
+        try:
+            response = await asyncio.to_thread(
+                self.client.reference_data.locations.get,
+                keyword=iata_code,
+                subType="AIRPORT",
+            )
+            return {"success": True, "data": response.data[0] if response.data else {}}
+        except ResponseError:
+            return {
+                "success": False,
+                "data": {},
+                "message": "공항 조회에 실패했습니다.",
+                "status_code": 502,
+            }
+
+    async def _convert_prices_to_krw(self, data, from_currency):
+        rates = await self.exchange_rate_service.get_current_rates([from_currency])
+        rate = next(
+            (r.base_rate for r in rates.rates if r.currency_code == from_currency), None
+        )
+        if not rates.success or not rate or rate <= 0:
+            raise ValueError("원화 환율을 확인하지 못했습니다.")
+        rate_date = next(
+            r.exchange_date for r in rates.rates if r.currency_code == from_currency
+        )
+        for offer in data:
+            offer["original_price"] = deepcopy(offer["price"])
+            offer["exchange_rate"] = {
+                "from_currency": from_currency,
+                "to_currency": "KRW",
+                "rate": rate,
+                "date": rate_date,
+            }
+            if offer["price"].get("currency") != from_currency:
+                raise ValueError("환산 전 통화 불일치")
+            self._convert_price_dict(offer["price"], rate)
+            for traveler in offer.get("travelerPricings", []):
+                self._convert_price_dict(traveler["price"], rate)
+        return data
+
+    def _convert_price_dict(self, price_dict, rate):
+        for key in ("total", "base", "grandTotal"):
+            if key in price_dict:
+                price_dict[key] = str(
+                    (Decimal(str(price_dict[key])) * Decimal(str(rate))).quantize(
+                        Decimal("1"), rounding=ROUND_HALF_UP
+                    )
+                )
+        for fee in price_dict.get("fees", []) + price_dict.get("taxes", []):
+            if "amount" in fee:
+                fee["amount"] = str(
+                    (Decimal(str(fee["amount"])) * Decimal(str(rate))).quantize(
+                        Decimal("1"), rounding=ROUND_HALF_UP
+                    )
+                )
+        price_dict["currency"] = "KRW"
+
     async def _get_dummy_flight_offers(
-        self,
-        origin: str,
-        destination: str,
-        departure_date: str,
-        return_date: Optional[str],
-        adults: int,
-        currency: str,
-    ) -> Dict[str, Any]:
-        """더미 항공편 검색 데이터"""
+        self, origin, destination, departure_date, return_date, adults, currency
+    ):
+        # Explicit demo mode only; these offers are never stored as historical fares.
+        itineraries = [
+            {
+                "duration": "PT2H30M",
+                "segments": [
+                    {
+                        "departure": {
+                            "iataCode": origin,
+                            "at": f"{departure_date}T09:00:00",
+                        },
+                        "arrival": {
+                            "iataCode": destination,
+                            "at": f"{departure_date}T11:30:00",
+                        },
+                        "carrierCode": "DEMO",
+                        "number": "001",
+                    }
+                ],
+            }
+        ]
+        if return_date:
+            itineraries.append(
+                {
+                    "duration": "PT2H30M",
+                    "segments": [
+                        {
+                            "departure": {
+                                "iataCode": destination,
+                                "at": f"{return_date}T17:00:00",
+                            },
+                            "arrival": {
+                                "iataCode": origin,
+                                "at": f"{return_date}T19:30:00",
+                            },
+                            "carrierCode": "DEMO",
+                            "number": "002",
+                        }
+                    ],
+                }
+            )
+        unit = {"KRW": 280000, "JPY": 28000, "USD": 200, "EUR": 180}.get(currency, 200)
         return {
             "success": True,
             "data": [
                 {
-                    "type": "flight-offer",
-                    "id": f"dummy-{origin}-{destination}-{departure_date}",
-                    "source": "GDS",
-                    "itineraries": [
-                        {
-                            "duration": "PT2H30M",
-                            "segments": [
-                                {
-                                    "departure": {
-                                        "iataCode": origin,
-                                        "at": f"{departure_date}T09:00:00",
-                                    },
-                                    "arrival": {
-                                        "iataCode": destination,
-                                        "at": f"{departure_date}T11:30:00",
-                                    },
-                                    "carrierCode": "KE",
-                                    "number": "704",
-                                }
-                            ],
-                        }
-                    ],
-                    "price": {
-                        "currency": currency,
-                        "total": "280000",
-                        "base": "250000",
-                    },
+                    "id": f"demo-{origin}-{destination}-{departure_date}",
+                    "source": "demo",
+                    "itineraries": itineraries,
+                    "price": {"total": str(unit * adults), "currency": currency},
                     "travelerPricings": [
                         {
-                            "travelerId": "1",
-                            "fareOption": "STANDARD",
-                            "travelerType": "ADULT",
-                            "price": {
-                                "currency": currency,
-                                "total": "280000",
-                                "base": "250000",
-                            },
+                            "travelerId": str(i + 1),
+                            "price": {"total": str(unit), "currency": currency},
                         }
+                        for i in range(adults)
                     ],
                 }
             ],
-            "meta": {"count": 1},
+            "meta": {"source": "demo", "is_demo": True},
         }
-
-    async def _get_dummy_airport_info(self, iata_code: str) -> Dict[str, Any]:
-        """더미 공항 정보"""
-        airport_data = {
-            "ICN": {
-                "type": "location",
-                "subType": "AIRPORT",
-                "name": "Incheon International Airport",
-                "iataCode": "ICN",
-                "address": {
-                    "cityName": "Seoul",
-                    "countryName": "South Korea",
-                    "countryCode": "KR",
-                },
-            },
-            "NRT": {
-                "type": "location",
-                "subType": "AIRPORT",
-                "name": "Narita International Airport",
-                "iataCode": "NRT",
-                "address": {
-                    "cityName": "Tokyo",
-                    "countryName": "Japan",
-                    "countryCode": "JP",
-                },
-            },
-            "HND": {
-                "type": "location",
-                "subType": "AIRPORT",
-                "name": "Haneda International Airport",
-                "iataCode": "HND",
-                "address": {
-                    "cityName": "Tokyo",
-                    "countryName": "Japan",
-                    "countryCode": "JP",
-                },
-            },
-        }
-
-        if iata_code in airport_data:
-            return {"success": True, "data": airport_data[iata_code]}
-        else:
-            return {
-                "success": False,
-                "message": "공항 정보를 찾을 수 없습니다.",
-                "data": {},
-            }
-
-    async def _convert_prices_to_krw(self, data, from_currency: str):
-        """가격 데이터를 KRW로 변환"""
-        try:
-            # 환율 정보 가져오기 (캐시 우선 사용으로 API 호출 최소화)
-            rates_response = await self.exchange_rate_service.get_current_rates(
-                [from_currency]
-            )
-            if not rates_response.success or not rates_response.rates:
-                logger.warning(f"환율 정보를 가져올 수 없습니다: {from_currency}")
-                return data
-
-            rate = rates_response.rates[0].base_rate
-
-            if isinstance(data, list):
-                for offer in data:
-                    if "price" in offer:
-                        self._convert_price_dict(offer["price"], rate)
-                    if "travelerPricings" in offer:
-                        for traveler in offer["travelerPricings"]:
-                            if "price" in traveler:
-                                self._convert_price_dict(traveler["price"], rate)
-
-            return data
-        except Exception as e:
-            logger.error(f"가격 변환 중 오류 발생: {e}")
-            return data
-
-    def _convert_price_dict(self, price_dict: dict, rate: float):
-        """가격 딕셔너리의 통화를 KRW로 변환"""
-        try:
-            if "total" in price_dict:
-                original_total = float(price_dict["total"])
-                price_dict["total"] = str(int(original_total * rate))
-
-            if "base" in price_dict:
-                original_base = float(price_dict["base"])
-                price_dict["base"] = str(int(original_base * rate))
-
-            price_dict["currency"] = "KRW"
-        except (ValueError, TypeError) as e:
-            logger.error(f"가격 변환 중 오류: {e}")
-            pass

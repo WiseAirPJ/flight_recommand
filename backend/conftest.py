@@ -1,37 +1,43 @@
-"""
-pytest 설정 파일
-"""
+"""Isolated test settings must be installed before application imports."""
+
 import os
-from unittest.mock import patch
 
 import pytest
 
+for key, value in {
+    "SECRET_KEY": "test-secret-key-minimum-32-characters-only",
+    "ENVIRONMENT": "test",
+    "DATABASE_URL": "sqlite:///:memory:",
+    "INIT_DB_ON_STARTUP": "true",
+    "USE_REAL_AMADEUS": "false",
+    "ENABLE_DUMMY_FALLBACK": "false",
+    "ENABLE_EXPERIMENTAL_FEATURES": "false",
+    "CELERY_BROKER_URL": "memory://",
+    "CELERY_RESULT_BACKEND": "cache+memory://",
+    "REDIS_URL": "",
+    "REDIS_HOST": "",
+    "OPENAI_API_KEY": "",
+    "AZURE_OPENAI_API_KEY": "",
+    "ANTHROPIC_API_KEY": "",
+    "AMADEUS_CLIENT_ID": "",
+    "AMADEUS_CLIENT_SECRET": "",
+    "KOREAEXIM_API_KEY": "",
+    "ADMIN_API_KEY": "",
+}.items():
+    os.environ[key] = value
 
-@pytest.fixture(scope="session", autouse=True)
-def setup_test_environment():
-    """테스트 환경 설정"""
-    # 테스트용 환경변수 설정
-    os.environ[
-        "SECRET_KEY"
-    ] = "test-secret-key-minimum-32-characters-for-testing-purposes-only"
-    os.environ["DEBUG"] = "true"
-    os.environ["ENVIRONMENT"] = "test"
-    os.environ["USE_REAL_AMADEUS"] = "false"
-    os.environ["ENABLE_DUMMY_FALLBACK"] = "true"
-    os.environ["REDIS_URL"] = "redis://localhost:6379/15"
-    os.environ["CELERY_BROKER_URL"] = "redis://localhost:6379/14"
-    os.environ["CELERY_RESULT_BACKEND"] = "redis://localhost:6379/13"
 
+@pytest.fixture(autouse=True)
+def isolate_cache_and_database():
+    from app.api.v1.flights import get_amadeus_service, get_cache_service
+    from app.api.v1.regions import get_monthly_analyzer
+    from app.core.database import Base, engine, init_db
+    from app.services.cache_service import CacheService
 
-@pytest.fixture
-def mock_settings():
-    """테스트용 설정 목킹"""
-    with patch("app.config.settings.settings") as mock:
-        mock.SECRET_KEY = (
-            "test-secret-key-minimum-32-characters-for-testing-purposes-only"
-        )
-        mock.DEBUG = True
-        mock.ENVIRONMENT = "test"
-        mock.USE_REAL_AMADEUS = False
-        mock.ENABLE_DUMMY_FALLBACK = True
-        yield mock
+    CacheService._shared_memory_cache.clear()
+    for provider in (get_amadeus_service, get_cache_service, get_monthly_analyzer):
+        provider.cache_clear()
+    init_db()
+    yield
+    Base.metadata.drop_all(engine)
+    CacheService._shared_memory_cache.clear()

@@ -89,7 +89,9 @@ async def get_date_info(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"날짜 정보 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"날짜 정보 조회 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/airports/search")
@@ -134,7 +136,9 @@ async def search_airports(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"공항 검색 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"공항 검색 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/holidays")
@@ -163,7 +167,9 @@ async def get_holidays(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"공휴일 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"공휴일 조회 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/seasons")
@@ -216,7 +222,9 @@ async def get_travel_seasons() -> Dict[str, Any]:
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"시즌 정보 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"시즌 정보 조회 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/price-trends")
@@ -239,36 +247,18 @@ async def get_price_trends(
                     status_code=404, detail=f"지역 '{region_id}'를 찾을 수 없습니다"
                 )
 
-        # 더미 가격 동향 데이터 (실제로는 DB에서 조회)
-        price_trends = {
-            "hokkaido": {"avg_price": 320000, "trend": "상승", "season_factor": 1.2},
-            "kanto": {"avg_price": 280000, "trend": "안정", "season_factor": 1.0},
-            "kansai": {"avg_price": 250000, "trend": "하락", "season_factor": 0.9},
-            "chubu": {"avg_price": 270000, "trend": "안정", "season_factor": 1.0},
-            "kyushu": {"avg_price": 230000, "trend": "상승", "season_factor": 1.1},
-            "okinawa": {"avg_price": 350000, "trend": "상승", "season_factor": 1.3},
-        }
-
-        if region_id:
-            trend_data = price_trends.get(region_id, {})
-            result_data = {region_id: trend_data} if trend_data else {}
-        else:
-            result_data = price_trends
-
         return {
             "success": True,
-            "message": "가격 동향 조회 완료",
-            "data": {
-                "trends": result_data,
-                "last_updated": datetime.now().isoformat(),
-                "note": "더미 데이터입니다. 실제 운영시에는 실시간 분석 필요",
-            },
+            "message": "비교할 가격 이력이 아직 충분하지 않습니다.",
+            "data": {"trends": {}, "status": "insufficient_history"},
         }
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"가격 동향 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"가격 동향 조회 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 # 헬스 체크

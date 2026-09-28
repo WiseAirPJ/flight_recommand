@@ -123,7 +123,9 @@ class HolidayAPIClient:
         day = holiday_date.day
 
         # 최고 성수기
-        if any(keyword in name for keyword in ["元日", "昭和", "憲法", "みどり", "こども"]):
+        if any(
+            keyword in name for keyword in ["元日", "昭和", "憲法", "みどり", "こども"]
+        ):
             return "very_high"
 
         # 골든위크 기간

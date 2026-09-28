@@ -31,7 +31,9 @@ class Region(BaseModel):
     name_en: str = Field(..., description="영문명")
     airports: List[Airport] = Field(..., description="공항 목록")
     main_airport: str = Field(..., description="주요 공항")
-    coordinates: Optional[List[List[float]]] = Field(None, description="지도 폴리곤 좌표")
+    coordinates: Optional[List[List[float]]] = Field(
+        None, description="지도 폴리곤 좌표"
+    )
 
     model_config = {
         "json_schema_extra": {

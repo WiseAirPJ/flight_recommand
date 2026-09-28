@@ -69,7 +69,7 @@ class TestLLMService:
 
     def test_llm_service_initialization(self, llm_service):
         """LLM 서비스 초기화 테스트"""
-        assert llm_service.cache == {}
+        assert llm_service.cache_service.get_cache("absent") is None
         assert llm_service.cache_ttl == 300
         assert llm_service.price_history == {}
         assert llm_service.price_alerts == []
@@ -118,8 +118,7 @@ class TestLLMService:
 
         # 캐시 통계
         stats = llm_service.get_cache_stats()
-        assert stats["total_entries"] == 1
-        assert stats["valid_entries"] == 1
+        assert stats["cache_backend"] == "CacheService"
 
     def test_price_history_update(self, llm_service, sample_flight_data):
         """가격 히스토리 업데이트 테스트"""
@@ -217,12 +216,14 @@ class TestLLMService:
 
         # 시간 조작 (TTL 초과)
         old_timestamp = datetime.now() - timedelta(seconds=llm_service.cache_ttl + 1)
-        llm_service.cache[cache_key] = (test_data, old_timestamp)
+        llm_service.cache_service._memory_cache[f"llm:{cache_key}"][
+            "expires_at"
+        ] = old_timestamp.isoformat()
 
         # 만료된 캐시 조회
         cached_data = llm_service._get_from_cache(cache_key)
         assert cached_data is None
-        assert cache_key not in llm_service.cache
+        assert llm_service.cache_service.get_cache(f"llm:{cache_key}") is None
 
     def test_price_history_cleanup(self, llm_service, sample_flight_data):
         """가격 히스토리 정리 테스트"""

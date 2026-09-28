@@ -15,7 +15,9 @@ router = APIRouter(prefix="/cache", tags=["cache"])
 class CacheRefreshRequest(BaseModel):
     """캐시 갱신 요청 모델"""
 
-    regions: Optional[List[str]] = Field(None, description="갱신할 지역 목록 (전체 갱신시 null)")
+    regions: Optional[List[str]] = Field(
+        None, description="갱신할 지역 목록 (전체 갱신시 null)"
+    )
     force_update: bool = Field(False, description="강제 갱신 여부")
     origin: str = Field("ICN", description="출발지 공항 코드")
 
@@ -72,7 +74,9 @@ async def get_cache_status(
         return {"success": True, "message": "캐시 상태 조회 완료", "data": status_info}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"캐시 상태 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"캐시 상태 조회 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.post("/refresh")
@@ -122,7 +126,9 @@ async def refresh_cache(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"캐시 갱신 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"캐시 갱신 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/statistics")
@@ -144,7 +150,9 @@ async def get_cache_statistics(
         return {"success": True, "message": "캐시 통계 조회 완료", "data": stats}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"캐시 통계 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"캐시 통계 조회 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/keys")
@@ -178,7 +186,9 @@ async def get_cache_keys(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"캐시 키 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"캐시 키 조회 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.delete("/keys/{key}")
@@ -207,12 +217,16 @@ async def delete_cache_key(
                 "data": {"deleted_key": key},
             }
         else:
-            raise HTTPException(status_code=404, detail=f"캐시 키 '{key}'를 찾을 수 없습니다")
+            raise HTTPException(
+                status_code=404, detail=f"캐시 키 '{key}'를 찾을 수 없습니다"
+            )
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"캐시 키 삭제 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"캐시 키 삭제 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.post("/cleanup")
@@ -239,7 +253,9 @@ async def cleanup_expired_cache(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"캐시 정리 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"캐시 정리 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/memory")
@@ -295,7 +311,9 @@ async def get_cache_performance(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"성능 지표 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"성능 지표 조회 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.post("/warmup")
@@ -328,7 +346,9 @@ async def warmup_cache(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"캐시 워밍업 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"캐시 워밍업 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 # 헬스 체크

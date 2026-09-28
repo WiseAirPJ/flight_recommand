@@ -119,9 +119,7 @@ class DateService:
                         "recommendation_level": (
                             "높음"
                             if total_score <= 2
-                            else "보통"
-                            if total_score <= 3.5
-                            else "낮음"
+                            else "보통" if total_score <= 3.5 else "낮음"
                         ),
                     }
                 )

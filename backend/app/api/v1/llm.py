@@ -109,7 +109,9 @@ async def analyze_flights(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"항공편 분석 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"항공편 분석 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.post("/basic-analysis", response_model=Dict[str, Any])
@@ -129,7 +131,9 @@ async def basic_flight_analysis(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"기본 항공편 분석 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"기본 항공편 분석 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.post("/price-alerts", response_model=Dict[str, Any])
@@ -159,7 +163,9 @@ async def create_price_alert(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"가격 알림 생성 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"가격 알림 생성 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.post("/check-alerts", response_model=Dict[str, Any])
@@ -186,7 +192,9 @@ async def check_price_alerts(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"가격 알림 확인 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"가격 알림 확인 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/cache-stats", response_model=Dict[str, Any])
@@ -204,7 +212,9 @@ async def get_llm_cache_stats(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"캐시 통계 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"캐시 통계 조회 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/exchange-rates", response_model=Dict[str, Any])
@@ -225,7 +235,9 @@ async def get_current_exchange_rates(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"환율 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"환율 조회 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/exchange-rates/historical", response_model=Dict[str, Any])
@@ -247,7 +259,9 @@ async def get_historical_exchange_rates(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"과거 환율 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"과거 환율 조회 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.post("/currency-conversion", response_model=Dict[str, Any])
@@ -270,7 +284,9 @@ async def convert_currency(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"통화 변환 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"통화 변환 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/exchange-rates/supported", response_model=Dict[str, Any])
@@ -289,7 +305,9 @@ async def get_supported_currencies(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"지원 통화 조회 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"지원 통화 조회 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/exchange-rates/cache-stats", response_model=Dict[str, Any])
@@ -308,5 +326,6 @@ async def get_exchange_cache_stats(
 
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"환율 캐시 통계 조회 중 오류가 발생했습니다: {str(e)}"
+            status_code=500,
+            detail=f"환율 캐시 통계 조회 중 오류가 발생했습니다: {str(e)}",
         )

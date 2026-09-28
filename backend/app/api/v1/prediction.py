@@ -39,7 +39,9 @@ async def predict_price(request: PricePredictionRequest):
         return {"success": True, "data": result}
 
     except ValueError:
-        raise HTTPException(status_code=400, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)")
+        raise HTTPException(
+            status_code=400, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)"
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"예측 실패: {str(e)}")
 
@@ -52,7 +54,9 @@ async def get_price_trend(request: PriceTrendRequest):
         return {"success": True, "data": trends}
 
     except ValueError:
-        raise HTTPException(status_code=400, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)")
+        raise HTTPException(
+            status_code=400, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)"
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"트렌드 예측 실패: {str(e)}")
 

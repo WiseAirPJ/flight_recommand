@@ -1,490 +1,183 @@
-import asyncio
-import calendar
-import logging
-from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+"""Sampled monthly fares, using the same provider/conditions as individual searches."""
 
-from amadeus import Client
+import calendar
+from datetime import date, datetime, timedelta, timezone
 
 from app.config.settings import settings
-
-logger = logging.getLogger(__name__)
+from app.models.flight_requests import MonthlySearchRequest
+from app.services.amadeus_service import AmadeusService
+from app.services.cache_service import CacheService
+from app.services.region_service import RegionService
+from app.utils.cache_keys import monthly_search_key
 
 
 class MonthlyPriceAnalyzer:
-    """월별 가격 분석기"""
+    def __init__(self, amadeus_service=None, cache_service=None):
+        self.amadeus_service = amadeus_service or AmadeusService()
+        self.cache_service = cache_service or CacheService()
+        self.japan_regions = RegionService().regions_data
 
-    def __init__(self):
-        """초기화"""
-        if settings.AMADEUS_CLIENT_ID and settings.AMADEUS_CLIENT_SECRET:
-            self.client = Client(
-                client_id=settings.AMADEUS_CLIENT_ID,
-                client_secret=settings.AMADEUS_CLIENT_SECRET,
-                hostname=settings.AMADEUS_HOSTNAME,
-                log_level="debug",
-            )
-            self.is_active = True
-        else:
-            self.client = None
-            self.is_active = False
-
-        self.executor = ThreadPoolExecutor(max_workers=5)
-
-        self.low_cost_carriers = {
-            "7C",
-            "LJ",
-            "BX",
-            "ZE",
-            "TW",
-            "4V",
-            "GK",
-            "MM",
-            "VY",
-            "IT",
-        }
-
-        # 일본 지역별 공항 정보
-        self.japan_regions = {
-            "hokkaido": {
-                "name": "홋카이도",
-                "airports": ["CTS"],
-                "main_airport": "CTS",
-            },
-            "kanto": {
-                "name": "간토 (도쿄)",
-                "airports": ["NRT", "HND"],
-                "main_airport": "NRT",
-            },
-            "kansai": {
-                "name": "간사이 (오사카)",
-                "airports": ["KIX"],
-                "main_airport": "KIX",
-            },
-            "chubu": {
-                "name": "중부 (나고야)",
-                "airports": ["NGO"],
-                "main_airport": "NGO",
-            },
-            "kyushu": {
-                "name": "규슈 (후쿠오카)",
-                "airports": ["FUK"],
-                "main_airport": "FUK",
-            },
-            "okinawa": {"name": "오키나와", "airports": ["OKA"], "main_airport": "OKA"},
-        }
+    def _get_search_dates(self, target_year, target_month):
+        first = max(
+            date(target_year, target_month, 1), date.today() + timedelta(days=1)
+        )
+        last = date(
+            target_year, target_month, calendar.monthrange(target_year, target_month)[1]
+        )
+        dates = []
+        while first <= last:
+            dates.append(first)
+            first += timedelta(days=settings.MONTHLY_SAMPLE_STEP)
+        return dates
 
     async def get_monthly_cheapest_dates(
         self,
-        target_year: int,
-        target_month: int,
-        origin: str = "ICN",
-        trip_duration: int = 4,
-        adults: int = 1,
-    ) -> Dict[str, Any]:
-        """
-        특정 월의 지역별 최저가 일자 검색
-
-        Args:
-            target_year: 대상 연도
-            target_month: 대상 월 (1-12)
-            origin: 출발지 (기본값: ICN)
-            trip_duration: 여행 기간 (기본값: 4일)
-            adults: 성인 승객 수 (기본값: 1명)
-
-        Returns:
-            지역별 최저가 일자 정보
-        """
-        logger.info(f"월별 최저가 검색 시작: {target_year}년 {target_month}월")
-
-        # 해당 월의 검색 가능한 날짜 범위 계산
-        search_dates = self._get_search_dates(target_year, target_month)
-
-        if not search_dates:
-            return {
-                "success": False,
-                "message": "검색 가능한 날짜가 없습니다",
-                "data": {},
-            }
-
-        # 각 지역별로 최저가 검색
-        regional_results = {}
-
-        for region_id, region_info in self.japan_regions.items():
-            logger.info(f"지역 검색 시작: {region_info['name']}")
-
-            region_result = await self._find_cheapest_dates_for_region(
-                origin=origin,
-                region_id=region_id,
-                region_info=region_info,
-                search_dates=search_dates,
-                trip_duration=trip_duration,
-            )
-
-            if region_result:
-                regional_results[region_id] = region_result
-
-        return {
-            "success": True,
-            "message": f"{target_year}년 {target_month}월 지역별 최저가 검색 완료",
+        target_year,
+        target_month,
+        origin="ICN",
+        trip_duration=4,
+        adults=1,
+        currency="KRW",
+        non_stop=False,
+        force_refresh=False,
+    ):
+        request = MonthlySearchRequest(
+            year=target_year,
+            month=target_month,
+            origin=origin,
+            duration_days=trip_duration,
+            adults=adults,
+            currency=currency,
+            non_stop=non_stop,
+        )
+        source = self.amadeus_service.source
+        key = monthly_search_key(request, source)
+        cached = None if force_refresh else self.cache_service.get_cache(key)
+        if cached is not None:
+            cached["data"]["from_cache"] = True
+            return cached
+        dates = self._get_search_dates(request.year, request.month)
+        regions, failures, searches = {}, 0, 0
+        for region_id, region in self.japan_regions.items():
+            options = []
+            # Scope is explicitly listed: representative airports plus Tokyo Haneda.
+            destinations = [region["main_airport"]]
+            if region_id == "kanto":
+                destinations.append("HND")
+            for destination in destinations:
+                for departure in dates:
+                    return_date = departure + timedelta(days=request.duration_days - 1)
+                    result = await self.amadeus_service.search_flight_offers(
+                        origin=request.origin,
+                        destination=destination,
+                        departure_date=departure.isoformat(),
+                        return_date=return_date.isoformat(),
+                        adults=request.adults,
+                        currency=request.currency,
+                        non_stop=request.non_stop,
+                    )
+                    searches += 1
+                    if not result["success"]:
+                        failures += 1
+                        continue
+                    offers = [
+                        offer
+                        for offer in result["data"]
+                        if offer.get("price", {}).get("currency") == request.currency
+                    ]
+                    if not offers:
+                        continue
+                    offer = min(offers, key=lambda item: float(item["price"]["total"]))
+                    options.append(
+                        {
+                            "departure_date": departure.isoformat(),
+                            "return_date": return_date.isoformat(),
+                            "duration_days": request.duration_days,
+                            "airport": destination,
+                            "price": float(offer["price"]["total"]),
+                            "currency": request.currency,
+                            "adults": request.adults,
+                            "observed_at": result.get("meta", {}).get("observed_at"),
+                            "offer_id": offer.get("id"),
+                            "source": source,
+                            "is_demo": source == "demo",
+                            "display_price_is_estimate": result.get("meta", {}).get(
+                                "display_price_is_estimate", False
+                            ),
+                            "baggage_policy": "provider_terms",
+                            "price_basis": "total_for_all_adults",
+                        }
+                    )
+            if options:
+                options.sort(key=lambda option: option["price"])
+                prices = [option["price"] for option in options]
+                regions[region_id] = {
+                    "region_name": region["name"],
+                    "airport": options[0]["airport"],
+                    "cheapest_option": options[0],
+                    "all_options": options[:5],
+                    "price_statistics": {
+                        "min_price": min(prices),
+                        "max_price": max(prices),
+                        "avg_price": round(sum(prices) / len(prices), 2),
+                        "price_samples": len(prices),
+                    },
+                }
+        result = {
+            "success": failures == 0 or failures < searches,
+            "message": "조회한 날짜 중 최저가입니다. 예약 시 가격과 수하물 조건을 다시 확인하세요.",
             "data": {
-                "year": target_year,
-                "month": target_month,
-                "origin": origin,
-                "trip_duration": trip_duration,
-                "regions": regional_results,
-                "total_regions": len(regional_results),
-                "search_date_range": {
-                    "start": search_dates[0].strftime("%Y-%m-%d"),
-                    "end": search_dates[-1].strftime("%Y-%m-%d"),
-                    "total_dates": len(search_dates),
-                },
+                **request.model_dump(),
+                "trip_duration": request.duration_days,
+                "regions": regions,
+                "total_regions": len(regions),
+                "from_cache": False,
+                "source": source,
+                "is_demo": source == "demo",
+                "partial": failures > 0,
+                "failed_searches": failures,
+                "total_searches": searches,
+                "price_basis": "total_for_all_adults",
+                "coverage": "sampled_dates",
+                "sample_step_days": settings.MONTHLY_SAMPLE_STEP,
+                "sampled_dates": [day.isoformat() for day in dates],
+                "searched_airports": [
+                    r["main_airport"] for r in self.japan_regions.values()
+                ]
+                + ["HND"],
+                "searched_at": datetime.now(timezone.utc).isoformat(),
             },
         }
-
-    def _get_search_dates(self, target_year: int, target_month: int) -> List[date]:
-        """
-        검색 가능한 날짜 목록 생성
-        현재 날짜 이후의 날짜만 검색 대상으로 함
-        """
-        today = date.today()
-
-        # 해당 월의 첫날과 마지막날
-        first_day = date(target_year, target_month, 1)
-        last_day = date(
-            target_year, target_month, calendar.monthrange(target_year, target_month)[1]
-        )
-
-        # 현재 날짜 이후의 날짜만 선택
-        search_dates = []
-        current_date = max(first_day, today + timedelta(days=7))  # 최소 7일 후부터
-
-        while current_date <= last_day:
-            search_dates.append(current_date)
-            current_date += timedelta(days=1)
-
-        # 주 단위로 샘플링 (API 호출량 최적화)
-        if len(search_dates) > 8:
-            # 일주일에 2번씩 샘플링
-            sampled_dates = []
-            for i in range(0, len(search_dates), 3):  # 3일마다
-                if i < len(search_dates):
-                    sampled_dates.append(search_dates[i])
-            search_dates = sampled_dates
-
-        logger.info(
-            f"검색 대상 날짜: {len(search_dates)}개 - {search_dates[0]} ~ {search_dates[-1]}"
-        )
-        return search_dates
-
-    def _calculate_baggage_fee(
-        self, carrier_code: str, adults: int, currency: str = "EUR"
-    ) -> float:
-        """
-        항공사별 수하물 요금 계산
-        """
-        if carrier_code in self.low_cost_carriers:
-            # 저가형 항공사: 20kg 기준 수하물 요금
-            if currency == "EUR":
-                # 유로 기준: 약 20유로 (30,000원 ÷ 1,500원/유로)
-                return 20.0 * adults
-            else:
-                # 원화 기준: 30,000원
-                return 30000 * adults
-        else:
-            return 0
-
-    async def _find_cheapest_dates_for_region(
-        self,
-        origin: str,
-        region_id: str,
-        region_info: Dict,
-        search_dates: List[date],
-        trip_duration: int,
-        adults: int = 1,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        특정 지역의 최저가 일자 검색
-        """
-        destination = region_info["main_airport"]
-        cheapest_price = float("inf")
-        best_dates = None
-        all_results = []
-
-        # 각 날짜별로 가격 검색
-        for departure_date in search_dates:
-            return_date = departure_date + timedelta(days=trip_duration)
-
-            # 해당 월을 벗어나지 않는지 확인
-            if return_date.month != departure_date.month and departure_date.day > 25:
-                continue
-
-            try:
-                result = await self._search_flight_price(
-                    origin=origin,
-                    destination=destination,
-                    departure_date=departure_date.strftime("%Y-%m-%d"),
-                    return_date=return_date.strftime("%Y-%m-%d"),
-                    adults=adults,
-                )
-
-                if result and result.get("success") and result.get("data"):
-                    flight_offer = result["data"][0]
-                    price_str = flight_offer.get("price", {}).get("total", "999999")
-
-                    try:
-                        price = float(price_str)
-
-                        # 결과 저장
-                        flight_result = {
-                            "departure_date": departure_date.strftime("%Y-%m-%d"),
-                            "return_date": return_date.strftime("%Y-%m-%d"),
-                            "price": price,
-                            "currency": flight_offer.get("price", {}).get(
-                                "currency", "EUR"
-                            ),
-                            "duration_days": trip_duration,
-                        }
-                        all_results.append(flight_result)
-
-                        # 최저가 업데이트
-                        if price < cheapest_price:
-                            cheapest_price = price
-                            best_dates = flight_result
-
-                    except (ValueError, TypeError):
-                        continue
-
-            except Exception as e:
-                logger.warning(f"날짜 {departure_date} 검색 실패: {str(e)}")
-                continue
-
-        if best_dates:
-            # 평균 가격 계산
-            prices = [
-                r["price"] for r in all_results if isinstance(r["price"], (int, float))
-            ]
-            avg_price = sum(prices) / len(prices) if prices else 0
-
-            return {
-                "region_name": region_info["name"],
-                "airport": destination,
-                "cheapest_option": best_dates,
-                "price_statistics": {
-                    "min_price": min(prices) if prices else 0,
-                    "max_price": max(prices) if prices else 0,
-                    "avg_price": round(avg_price, 2),
-                    "price_samples": len(prices),
-                },
-                "all_options": sorted(all_results, key=lambda x: x["price"])[
-                    :5
-                ],  # 상위 5개만
-            }
-
-        return None
-
-    async def _search_flight_price(
-        self,
-        origin: str,
-        destination: str,
-        departure_date: str,
-        return_date: str,
-        adults: int = 1,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        특정 날짜의 항공편 가격 검색
-        """
-        if not self.is_active:
-            return await self._get_dummy_flight_price(
-                origin, destination, departure_date, return_date, adults
+        if searches and failures == searches:
+            result.update(
+                status_code=503 if source == "unavailable" else 502,
+                message="항공권 공급자 조회에 실패했습니다.",
             )
-
-        def _search():
-            params = {
-                "originLocationCode": origin,
-                "destinationLocationCode": destination,
-                "departureDate": departure_date,
-                "returnDate": return_date,
-                "adults": adults,
-                "currencyCode": "EUR",
-                "max": 1,  # 최저가 1개만
-            }
-
-            logger.debug(f"항공편 가격 검색: {params}")
-            return self.client.shopping.flight_offers_search.get(**params)
-
-        try:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(self.executor, _search)
-
-            if hasattr(response, "data") and response.data:
-                processed_data = []
-                for offer in response.data:
-                    carrier_code = "KE"  # 기본값
-                    if offer.get("itineraries") and offer["itineraries"][0].get(
-                        "segments"
-                    ):
-                        carrier_code = offer["itineraries"][0]["segments"][0].get(
-                            "carrierCode", "KE"
-                        )
-
-                    original_price = float(offer.get("price", {}).get("total", "0"))
-
-                    baggage_fee = self._calculate_baggage_fee(
-                        carrier_code, adults, "EUR"
-                    )
-
-                    final_price = original_price + baggage_fee
-
-                    offer["price"]["total"] = str(round(final_price, 2))
-                    offer["carrier_code"] = carrier_code
-                    offer["base_price"] = str(round(original_price, 2))
-                    offer["baggage_fee"] = str(round(baggage_fee, 2))
-                    offer["is_low_cost"] = carrier_code in self.low_cost_carriers
-
-                    processed_data.append(offer)
-
-                return {
-                    "success": True,
-                    "data": processed_data,
-                }
-
-            return {
-                "success": True,
-                "data": [],
-            }
-
-        except Exception as error:
-            logger.warning(
-                f"API 호출 실패 ({origin}->{destination}, {departure_date}): {str(error)}"
+        result["data"]["cache_saved"] = not failures
+        if result["success"] and not failures:
+            result["data"]["cache_saved"] = self.cache_service.set_cache(
+                key, result, settings.MONTHLY_CACHE_TTL
             )
-            return None
+        return result
 
-    async def _get_dummy_flight_price(
-        self,
-        origin: str,
-        destination: str,
-        departure_date: str,
-        return_date: str,
-        adults: int = 1,
-    ) -> Dict[str, Any]:
-        """더미 항공편 가격 데이터"""
-        # 목적지별 기본 가격 (시뮬레이션)
-        base_prices = {
-            "NRT": 280000,
-            "HND": 290000,
-            "KIX": 250000,
-            "CTS": 320000,
-            "NGO": 270000,
-            "FUK": 230000,
-            "OKA": 350000,
-        }
-
-        # 날짜별 가격 변동 시뮬레이션
-        base_price = base_prices.get(destination, 280000)
-
-        # 요일별 가격 변동 (금토일 비쌈)
-        dept_date = datetime.strptime(departure_date, "%Y-%m-%d")
-        weekday_multiplier = 1.2 if dept_date.weekday() in [4, 5, 6] else 1.0
-
-        # 월별 시즌 변동
-        month_multipliers = {
-            3: 1.4,
-            4: 1.5,
-            5: 1.3,  # 봄 (벚꽃)
-            7: 1.2,
-            8: 1.3,  # 여름
-            10: 1.3,
-            11: 1.4,  # 가을 (단풍)
-            12: 1.1,
-            1: 1.2,  # 겨울
-        }
-        season_multiplier = month_multipliers.get(dept_date.month, 1.0)
-
-        import random
-
-        random.seed(hash(f"{origin}{destination}{departure_date}"))  # 일관성을 위한 시드
-
-        if random.random() < 0.6:
-            carrier_code = random.choice(list(self.low_cost_carriers))
-        else:
-            # 일반 항공사
-            carrier_code = random.choice(["KE", "OZ", "NH", "JL"])
-
-        base_flight_price = int(
-            base_price * weekday_multiplier * season_multiplier * adults
-        )
-
-        # 수하물 요금 계산 (KRW 기준)
-        baggage_fee = self._calculate_baggage_fee(carrier_code, adults, "KRW")
-
-        # 최종 가격 = 기본 항공료 + 수하물 요금
-        final_price = int(base_flight_price + baggage_fee)
-
-        return {
-            "success": True,
-            "data": [
-                {
-                    "type": "flight-offer",
-                    "price": {"currency": "KRW", "total": str(final_price)},
-                    "carrier_code": carrier_code,
-                    "base_price": str(base_flight_price),
-                    "baggage_fee": str(int(baggage_fee)),
-                    "is_low_cost": carrier_code in self.low_cost_carriers,
-                }
-            ],
-        }
-
-    async def get_current_month_cheapest(
-        self, origin: str = "ICN", adults: int = 1
-    ) -> Dict[str, Any]:
-        """
-        이번 달 지역별 최저가 검색 (기본 기능)
-        """
+    async def get_current_month_cheapest(self, origin="ICN", adults=1):
         today = date.today()
         return await self.get_monthly_cheapest_dates(
-            target_year=today.year,
-            target_month=today.month,
-            origin=origin,
-            adults=adults,
+            today.year, today.month, origin, adults=adults
         )
 
-    async def get_next_month_cheapest(
-        self, origin: str = "ICN", adults: int = 1
-    ) -> Dict[str, Any]:
-        """
-        다음 달 지역별 최저가 검색
-        """
-        today = date.today()
-        next_month = today.month + 1 if today.month < 12 else 1
-        next_year = today.year if today.month < 12 else today.year + 1
-
+    async def get_next_month_cheapest(self, origin="ICN", adults=1):
+        next_month = (date.today().replace(day=1) + timedelta(days=32)).replace(day=1)
         return await self.get_monthly_cheapest_dates(
-            target_year=next_year, target_month=next_month, origin=origin, adults=adults
+            next_month.year, next_month.month, origin, adults=adults
         )
 
-    def __del__(self):
-        """리소스 정리"""
-        if hasattr(self, "executor"):
-            self.executor.shutdown(wait=False)
+
+async def search_monthly_cheapest_dates(year, month, origin="ICN", duration=4):
+    return await MonthlyPriceAnalyzer().get_monthly_cheapest_dates(
+        year, month, origin, duration
+    )
 
 
-# 편의 함수들
-
-
-async def search_monthly_cheapest_dates(
-    year: int, month: int, origin: str = "ICN", duration: int = 4
-) -> Dict[str, Any]:
-    """
-    월별 최저가 검색 편의 함수
-    """
-    analyzer = MonthlyPriceAnalyzer()
-    return await analyzer.get_monthly_cheapest_dates(year, month, origin, duration)
-
-
-async def get_this_month_cheapest(origin: str = "ICN") -> Dict[str, Any]:
-    """
-    이번 달 최저가 검색 편의 함수
-    """
-    analyzer = MonthlyPriceAnalyzer()
-    return await analyzer.get_current_month_cheapest(origin)
+async def get_this_month_cheapest(origin="ICN"):
+    return await MonthlyPriceAnalyzer().get_current_month_cheapest(origin)

@@ -17,7 +17,7 @@ openai==1.93.0
 amadeus==8.1.0
 
 python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+passlib==1.7.4
 python-multipart>=0.0.18
 
 python-decouple==3.8

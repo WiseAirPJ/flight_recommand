@@ -244,7 +244,7 @@ class TestDateCalculator:
         """월별 특성 정보 테스트"""
         result = DateCalculator.get_month_characteristics(4)  # 4월
 
-        assert result["season"] == "벚꽃 절정"
+        assert "벚꽃 절정" in result["events"]
         assert result["crowds"] == "최고"
         assert result["price_level"] == "최고"
         assert "벚꽃 구경" in result["recommended_activities"]

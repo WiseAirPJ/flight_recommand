@@ -2,11 +2,13 @@
 항공편 API 테스트
 """
 
-from unittest.mock import Mock, patch
+from datetime import date, timedelta
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.v1.flights import get_amadeus_service, get_cache_service
 from app.main import app
 
 client = TestClient(app)
@@ -17,34 +19,34 @@ class TestFlightsAPI:
 
     @pytest.fixture
     def mock_amadeus_service(self):
-        """Mock Amadeus 서비스"""
-        with patch("app.api.v1.flights.get_amadeus_service") as mock:
-            service = Mock()
-            service.search_flight_offers.return_value = {
+        service = Mock(source="amadeus_test")
+        service.search_flight_offers = AsyncMock(
+            return_value={
                 "success": True,
-                "data": [{"id": "1", "price": {"total": "300000"}}],
-                "meta": {},
+                "data": [{"id": "1", "price": {"total": "300000", "currency": "KRW"}}],
+                "meta": {"source": "amadeus_test"},
                 "dictionaries": {},
             }
-            mock.return_value = service
-            yield service
+        )
+        service.get_airport_info = AsyncMock()
+        app.dependency_overrides[get_amadeus_service] = lambda: service
+        yield service
+        app.dependency_overrides.pop(get_amadeus_service, None)
 
     @pytest.fixture
     def mock_cache_service(self):
-        """Mock 캐시 서비스"""
-        with patch("app.api.v1.flights.get_cache_service") as mock:
-            service = Mock()
-            service.get_cache.return_value = None
-            service.set_cache.return_value = None
-            mock.return_value = service
-            yield service
+        service = Mock()
+        service.get_cache.return_value = None
+        app.dependency_overrides[get_cache_service] = lambda: service
+        yield service
+        app.dependency_overrides.pop(get_cache_service, None)
 
     def test_search_flights_success(self, mock_amadeus_service, mock_cache_service):
         """항공편 검색 성공 테스트"""
         request_data = {
             "origin": "ICN",
             "destination": "NRT",
-            "departure_date": "2025-08-15",
+            "departure_date": (date.today() + timedelta(days=30)).isoformat(),
             "adults": 1,
         }
 
@@ -74,7 +76,7 @@ class TestFlightsAPI:
         request_data = {
             "origin": "ICN",
             "destination": "NRT",
-            "departure_date": "2025-08-15",
+            "departure_date": (date.today() + timedelta(days=30)).isoformat(),
             "duration_days": 4,
             "adults": 1,
         }
@@ -103,7 +105,7 @@ class TestFlightsAPI:
         """잘못된 IATA 코드 테스트"""
         response = client.get("/api/v1/flights/airport/INVALID")
 
-        assert response.status_code == 500  # 검증 오류
+        assert response.status_code == 422  # 입력 검증 오류
 
     def test_popular_routes_success(self, mock_cache_service):
         """인기 노선 조회 성공 테스트"""

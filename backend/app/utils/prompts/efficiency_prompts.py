@@ -71,7 +71,9 @@ JSON 형식만 응답하고, 다른 텍스트는 포함하지 마세요.
 
             for i, itinerary in enumerate(itineraries):
                 formatted += f"\n{i + 1}번째 여정:\n"
-                formatted += f"  총 소요시간: {itinerary.get('duration', '정보 없음')}\n"
+                formatted += (
+                    f"  총 소요시간: {itinerary.get('duration', '정보 없음')}\n"
+                )
 
                 segments = itinerary.get("segments", [])
                 for j, segment in enumerate(segments):
@@ -81,7 +83,9 @@ JSON 형식만 응답하고, 다른 텍스트는 포함하지 마세요.
                     formatted += f"  구간 {j + 1}: {departure.get('iataCode', '')} → {arrival.get('iataCode', '')}\n"
                     formatted += f"    출발: {departure.get('at', '정보 없음')}\n"
                     formatted += f"    도착: {arrival.get('at', '정보 없음')}\n"
-                    formatted += f"    항공사: {segment.get('carrierCode', '정보 없음')}\n"
+                    formatted += (
+                        f"    항공사: {segment.get('carrierCode', '정보 없음')}\n"
+                    )
 
             return formatted
 

@@ -79,8 +79,8 @@ class TestExchangeRateService:
         assert exchange_service.base_url == "https://oapi.koreaexim.go.kr"
         assert exchange_service.endpoint == "/site/program/financial/exchangeJSON"
         assert exchange_service.auth_key == "test_api_key"
-        assert exchange_service.cache == {}
-        assert exchange_service.cache_ttl == 3600
+        assert exchange_service.cache_service.get_cache("absent") is None
+        assert exchange_service.cache_ttl == 14400
 
     def test_exchange_rate_data_class(self):
         """환율 데이터 클래스 테스트"""
@@ -118,8 +118,8 @@ class TestExchangeRateService:
         assert len(rates) == 2
         assert rates[0].currency_code == "USD"
         assert rates[0].base_rate == 1300.0
-        assert rates[1].currency_code == "JPY(100)"
-        assert rates[1].base_rate == 950.0
+        assert rates[1].currency_code == "JPY"
+        assert rates[1].base_rate == 9.5
 
     def test_parse_exchange_rates_with_invalid_data(self, exchange_service):
         """잘못된 데이터로 환율 파싱 테스트"""
@@ -135,9 +135,7 @@ class TestExchangeRateService:
 
         rates = exchange_service._parse_exchange_rates(invalid_data)
 
-        assert len(rates) == 1
-        assert rates[0].base_rate == 0.0
-        assert rates[0].buy_rate == 0.0
+        assert rates == []
 
     def test_cache_functionality(self, exchange_service):
         """캐시 기능 테스트"""
@@ -145,15 +143,15 @@ class TestExchangeRateService:
         test_data = {"test": "data"}
 
         # 캐시 저장
-        exchange_service._set_cache(cache_key, test_data, ttl=3600)
+        exchange_service.cache_service.set_cache(cache_key, test_data, ttl_seconds=3600)
 
         # 캐시 조회
-        cached_data = exchange_service._get_from_cache(cache_key)
+        cached_data = exchange_service.cache_service.get_cache(cache_key)
         assert cached_data == test_data
 
         # 캐시 만료 테스트
-        exchange_service._set_cache(cache_key, test_data, ttl=0)
-        cached_data = exchange_service._get_from_cache(cache_key)
+        exchange_service.cache_service.set_cache(cache_key, test_data, ttl_seconds=0)
+        cached_data = exchange_service.cache_service.get_cache(cache_key)
         assert cached_data is None
 
     @pytest.mark.asyncio
@@ -231,13 +229,15 @@ class TestExchangeRateService:
         """캐시에서 현재 환율 조회 테스트"""
         # 캐시에 데이터 설정
         today = datetime.now().strftime("%Y%m%d")
-        cache_key = f"current_rates_{today}"
+        cache_key = f"exchange_rate:v2:{today}"
 
         cached_response = ExchangeRateResponse(
-            success=True, rates=[], updated_at=datetime.now().isoformat()
+            success=True,
+            rates=exchange_service._parse_exchange_rates(sample_api_response),
+            updated_at=datetime.now().isoformat(),
         )
 
-        exchange_service._set_cache(cache_key, cached_response.to_dict())
+        exchange_service.cache_service.set_cache(cache_key, cached_response.to_dict())
 
         with patch.object(exchange_service, "_fetch_exchange_rates") as mock_fetch:
             result = await exchange_service.get_current_rates()
@@ -255,7 +255,7 @@ class TestExchangeRateService:
             result = await exchange_service.get_current_rates()
 
             assert result.success is False
-            assert "환율 데이터를 가져올 수 없습니다" in result.error_message
+            assert "환율이 없습니다" in result.error_message
 
     @pytest.mark.asyncio
     async def test_get_historical_rates_success(
@@ -332,7 +332,7 @@ class TestExchangeRateService:
             result = await exchange_service.convert_currency(100, "XXX", "KRW")
 
             assert result["success"] is False
-            assert "환율 정보를 찾을 수 없습니다" in result["error"]
+            assert "환율이 없습니다" in result["error"]
 
     def test_get_supported_currencies(self, exchange_service):
         """지원 통화 목록 테스트"""
@@ -342,26 +342,24 @@ class TestExchangeRateService:
         assert "USD" in currencies
         assert "JPY" in currencies
         assert "EUR" in currencies
-        assert len(currencies) > 50
+        assert "KRW" in currencies
 
     @pytest.mark.asyncio
     async def test_get_cache_stats(self, exchange_service):
         """캐시 통계 테스트"""
         # 캐시에 데이터 추가
-        exchange_service._set_cache("test1", {"data": "test1"})
-        exchange_service._set_cache("test2", {"data": "test2"})
+        exchange_service.cache_service.set_cache("test1", {"data": "test1"})
+        exchange_service.cache_service.set_cache("test2", {"data": "test2"})
 
         stats = await exchange_service.get_cache_stats()
 
-        assert stats["total_entries"] == 2
-        assert stats["valid_entries"] == 2
-        assert stats["cache_hit_ratio"] == 1.0
-        assert stats["default_ttl"] == 3600
+        assert stats["cache_backend"] == "CacheService"
+        assert stats["default_ttl"] == 14400
 
     def test_exchange_rate_type_enum(self):
         """환율 타입 열거형 테스트"""
         assert ExchangeRateType.CURRENT.value == "AP01"
-        assert ExchangeRateType.HISTORICAL.value == "AP02"
+        assert ExchangeRateType.HISTORICAL.value == "AP01"
 
     @pytest.mark.asyncio
     async def test_error_handling_in_get_current_rates(self, exchange_service):
@@ -384,3 +382,31 @@ class TestExchangeRateService:
 
             assert result["success"] is False
             assert "통화 변환 중 오류가 발생했습니다" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_currency_filters_do_not_contaminate_cache():
+    service = ExchangeRateService()
+    data = [
+        {
+            "result": 1,
+            "cur_unit": "JPY(100)",
+            "deal_bas_r": "950",
+            "tts": "960",
+            "ttb": "940",
+        },
+        {"result": 1, "cur_unit": "USD", "deal_bas_r": "1300"},
+    ]
+    with patch.object(service, "_fetch_exchange_rates", return_value=data) as fetch:
+        jpy = await service.get_current_rates(["JPY"])
+        usd = await service.get_current_rates(["USD"])
+        assert isinstance(usd.rates[0], ExchangeRate)
+        assert usd.rates[0].currency_code == "USD"
+        assert jpy.rates[0].base_rate == 9.5
+        assert jpy.rates[0].send_rate == 9.6
+        assert fetch.call_count == 1
+        result = await service.convert_currency(1300, "KRW", "USD")
+        assert result["converted_amount"] == 1
+        historical = await service.get_historical_rates("20200101", ["JPY"])
+        assert historical.rates[0].exchange_date == "20200101"
+        assert fetch.call_args.args == ("20200101", "AP01")

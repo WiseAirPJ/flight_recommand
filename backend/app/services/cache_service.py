@@ -1,5 +1,6 @@
 import json
 import logging
+from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -13,27 +14,33 @@ logger = logging.getLogger(__name__)
 class CacheService:
     """Redis 기반 캐시 관리 서비스"""
 
+    _shared_memory_cache = {}
+
     def __init__(self):
         """캐시 서비스 초기화"""
+        self._memory_cache = self._shared_memory_cache
+        self.redis_client = None
+        self.is_connected = False
         try:
-            self.redis_client = redis.Redis(
-                host=settings.REDIS_HOST,
-                port=settings.REDIS_PORT,
-                username=settings.REDIS_USERNAME,
-                password=settings.REDIS_PASSWORD,
-                decode_responses=True,
-                socket_timeout=5,
-                socket_connect_timeout=5,
+            options = dict(
+                decode_responses=True, socket_timeout=2, socket_connect_timeout=2
             )
-
-            self.redis_client.ping()
-            self.is_connected = True
-            logger.info("CacheService Redis 연결 성공")
-        except Exception as e:
-            logger.warning(f"Redis 연결 실패, 메모리 캐시로 대체: {str(e)}")
+            if settings.REDIS_URL:
+                self.redis_client = redis.Redis.from_url(settings.REDIS_URL, **options)
+            elif settings.REDIS_HOST:
+                self.redis_client = redis.Redis(
+                    host=settings.REDIS_HOST,
+                    port=settings.REDIS_PORT,
+                    username=settings.REDIS_USERNAME,
+                    password=settings.REDIS_PASSWORD,
+                    **options,
+                )
+            if self.redis_client is not None:
+                self.redis_client.ping()
+                self.is_connected = True
+        except redis.RedisError:
+            logger.warning("Redis unavailable; using process-local memory cache")
             self.redis_client = None
-            self.is_connected = False
-            self._memory_cache = {}  # 대체 메모리 캐시
 
         # 캐시 키 네이밍 규칙
         self.cache_keys = {
@@ -135,6 +142,11 @@ class CacheService:
 
         patterns = [
             "monthly_cheapest:*",
+            "flight_search:*",
+            "duration_search:*",
+            "cheapest_dates:*",
+            "airport_info:*",
+            "llm:*",
             "regional_lowest_prices*",
             "date_info:*",
             "exchange_rate:*",
@@ -177,23 +189,8 @@ class CacheService:
             ),
         ]
 
-    def _should_refresh_cache(self, cache_key: str, force_update: bool) -> bool:
-        """캐시 갱신이 필요한지 확인"""
-        if force_update:
-            return True
-
-        if self.is_connected:
-            cached_data = self.redis_client.get(cache_key)
-            if not cached_data:
-                return True
-            try:
-                cache_info = json.loads(cached_data)
-                expires_at = datetime.fromisoformat(cache_info.get("expires_at", ""))
-                return datetime.now() > expires_at
-            except (json.JSONDecodeError, ValueError):
-                return True
-        else:
-            return cache_key not in self._memory_cache
+    def _should_refresh_cache(self, cache_key, force_update):
+        return force_update or not self.is_cache_valid(cache_key)
 
     async def refresh_cache(
         self,
@@ -214,14 +211,20 @@ class CacheService:
             refresh_info = {
                 "started_at": datetime.now().isoformat(),
                 "origin": origin,
-                "regions": regions or "all",
+                "regions": "all",
+                "requested_regions": regions,
                 "force_update": force_update,
                 "tasks_created": [],
             }
 
             for year, month in self._get_months_to_refresh():
-                cache_key = self.cache_keys["monthly_data"].format(
-                    origin=origin, year=year, month=month
+                from app.models.flight_requests import MonthlySearchRequest
+                from app.services.amadeus_service import AmadeusService
+                from app.utils.cache_keys import monthly_search_key
+
+                cache_key = monthly_search_key(
+                    MonthlySearchRequest(origin=origin, year=year, month=month),
+                    AmadeusService().source,
                 )
 
                 if self._should_refresh_cache(cache_key, force_update):
@@ -373,7 +376,7 @@ class CacheService:
         current_time = datetime.now()
         expired_keys = []
 
-        for key, value in self._memory_cache.items():
+        for key, value in list(self._memory_cache.items()):
             if isinstance(value, dict) and "expires_at" in value:
                 try:
                     expires_at = datetime.fromisoformat(value["expires_at"])
@@ -525,7 +528,9 @@ class CacheService:
             suggestions.append("메모리 단편화가 높습니다. Redis 재시작을 고려해보세요.")
 
         if app_key_count > 10000:
-            suggestions.append("캐시 키가 너무 많습니다. 만료 시간을 단축하거나 정리 주기를 늘려보세요.")
+            suggestions.append(
+                "캐시 키가 너무 많습니다. 만료 시간을 단축하거나 정리 주기를 늘려보세요."
+            )
 
         used_memory = memory_info.get("used_memory", 0)
         if used_memory > 1024 * 1024 * 1024:  # 1GB 이상
@@ -581,7 +586,9 @@ class CacheService:
 
         clients = info.get("connected_clients", 0)
         if clients > 100:
-            recommendations.append("연결된 클라이언트가 많습니다. 커넥션 풀 설정을 확인해보세요.")
+            recommendations.append(
+                "연결된 클라이언트가 많습니다. 커넥션 풀 설정을 확인해보세요."
+            )
 
         return recommendations
 
@@ -602,7 +609,8 @@ class CacheService:
         try:
             warmup_info = {
                 "started_at": datetime.now().isoformat(),
-                "regions": regions or "all",
+                "regions": "all",
+                "requested_regions": regions,
                 "months_ahead": months_ahead,
                 "tasks_created": [],
             }
@@ -611,16 +619,20 @@ class CacheService:
             today = datetime.now().date()
 
             for i in range(months_ahead):
-                target_date = today.replace(day=1) + timedelta(days=32 * i)
-                target_year = target_date.year
-                target_month = target_date.month
-
-                task = collect_monthly_cheapest_data.delay(
-                    target_year, target_month, "ICN"
-                )
-                warmup_info["tasks_created"].append(
-                    {"task_id": task.id, "year": target_year, "month": target_month}
-                )
+                ordinal = today.year * 12 + today.month - 1 + i
+                target_year, zero_based_month = divmod(ordinal, 12)
+                for origin in settings.COLLECTION_ORIGINS:
+                    task = collect_monthly_cheapest_data.delay(
+                        target_year, zero_based_month + 1, origin
+                    )
+                    warmup_info["tasks_created"].append(
+                        {
+                            "task_id": task.id,
+                            "year": target_year,
+                            "month": zero_based_month + 1,
+                            "origin": origin,
+                        }
+                    )
 
             return {
                 "success": True,
@@ -689,12 +701,11 @@ class CacheService:
         """캐시 설정 (동기 버전)"""
         try:
             if self.is_connected:
-                if isinstance(value, dict):
-                    value_str = json.dumps(value, default=str)
-                else:
-                    value_str = str(value)
-
-                return self.redis_client.setex(key, ttl_seconds, value_str)
+                if ttl_seconds <= 0:
+                    self.redis_client.delete(key)
+                    return True
+                value_str = json.dumps(value, default=str)
+                return bool(self.redis_client.setex(key, ttl_seconds, value_str))
             else:
                 # 메모리 캐시
                 if len(self._memory_cache) >= 1000:
@@ -702,7 +713,7 @@ class CacheService:
                     del self._memory_cache[oldest_key]
 
                 self._memory_cache[key] = {
-                    "data": value,
+                    "data": deepcopy(value),
                     "expires_at": (
                         datetime.now() + timedelta(seconds=ttl_seconds)
                     ).isoformat(),
@@ -730,7 +741,7 @@ class CacheService:
                 if cached:
                     expires_at = datetime.fromisoformat(cached["expires_at"])
                     if datetime.now() < expires_at:
-                        return cached["data"]
+                        return deepcopy(cached["data"])
                     else:
                         # 만료된 캐시 삭제
                         del self._memory_cache[key]

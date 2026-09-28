@@ -1,46 +1,41 @@
-def flight_search_key(*args, **kwargs) -> str:
+"""Versioned cache keys include every condition that changes a quote."""
+
+import hashlib
+import json
+
+
+def _request_key(prefix, args, kwargs):
     request = args[0] if args else kwargs.get("request")
-    if not request:
-        return "flight_search:unknown"
-
-    return (
-        f"flight_search:{request.origin}:{request.destination}:"
-        f"{request.departure_date}:{request.return_date}:{request.adults}"
-    )
-
-
-def duration_search_key(*args, **kwargs) -> str:
-    request = args[0] if args else kwargs.get("request")
-    if not request:
-        return "duration_search:unknown"
-
-    return (
-        f"duration_search:{request.origin}:{request.destination}:"
-        f"{request.departure_date}:{request.duration_days}:{request.adults}"
-    )
+    if request is None:
+        raise ValueError("검색 조건이 필요합니다.")
+    payload = request.model_dump(mode="json")
+    service = kwargs.get("amadeus_service")
+    if service is not None:
+        payload["source"] = service.source
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    return f"{prefix}:v2:{digest}"
 
 
-def cheapest_dates_key(*args, **kwargs) -> str:
-    request = args[0] if args else kwargs.get("request")
-    if not request:
-        return "cheapest_dates:unknown"
-
-    return (
-        f"cheapest_dates:{request.origin}:{request.destination}:"
-        f"{request.departure_date}:{request.duration}:{request.flexibility_days}"
-    )
+def flight_search_key(*args, **kwargs):
+    return _request_key("flight_search", args, kwargs)
 
 
-def airport_info_key(*args, **kwargs) -> str:
-    iata_code = args[0] if args else kwargs.get("iata_code")
-    if not iata_code:
-        return "airport_info:unknown"
-
-    return f"airport_info:{iata_code.upper()}"
+def duration_search_key(*args, **kwargs):
+    return _request_key("duration_search", args, kwargs)
 
 
-def popular_routes_key(*args, **kwargs) -> str:
-    origin = kwargs.get("origin", "ICN")
-    limit = kwargs.get("limit", 10)
+def cheapest_dates_key(*args, **kwargs):
+    return _request_key("cheapest_dates", args, kwargs)
 
-    return f"popular_routes:{origin}:{limit}"
+
+def airport_info_key(*args, **kwargs):
+    code = args[0] if args else kwargs.get("iata_code", "")
+    return f"airport_info:{code.upper()}"
+
+
+def popular_routes_key(*args, **kwargs):
+    return f"popular_routes:{kwargs.get('origin', 'ICN')}:{kwargs.get('limit', 10)}"
+
+
+def monthly_search_key(request, source):
+    return _request_key(f"monthly_cheapest:{source}", [request], {})

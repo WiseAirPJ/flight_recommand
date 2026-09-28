@@ -1,4 +1,5 @@
 from datetime import datetime
+from functools import lru_cache
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -31,10 +32,12 @@ from app.utils.validators import validate_iata_code
 router = APIRouter(prefix="/flights", tags=["flights"])
 
 
+@lru_cache
 def get_amadeus_service() -> AmadeusService:
     return AmadeusService()
 
 
+@lru_cache
 def get_cache_service() -> CacheService:
     return CacheService()
 
@@ -55,10 +58,13 @@ async def search_flights(
         return_date=request.return_date,
         adults=request.adults,
         currency=request.currency,
+        non_stop=request.non_stop,
     )
 
     if not result["success"]:
-        raise HTTPException(status_code=404, detail=result["message"])
+        raise HTTPException(
+            status_code=result.get("status_code", 502), detail=result["message"]
+        )
 
     return {
         "success": True,
@@ -91,10 +97,13 @@ async def search_oneway_flights(
         return_date=None,  # 편도이므로 없음
         adults=request.adults,
         currency=request.currency,
+        non_stop=request.non_stop,
     )
 
     if not result["success"]:
-        raise HTTPException(status_code=404, detail=result["message"])
+        raise HTTPException(
+            status_code=result.get("status_code", 502), detail=result["message"]
+        )
 
     return {
         "success": True,
@@ -127,10 +136,13 @@ async def search_flights_by_duration(
         return_date=return_date.strftime("%Y-%m-%d"),
         adults=request.adults,
         currency=request.currency,
+        non_stop=request.non_stop,
     )
 
     if not result["success"]:
-        raise HTTPException(status_code=404, detail=result["message"])
+        raise HTTPException(
+            status_code=result.get("status_code", 502), detail=result["message"]
+        )
 
     return {
         "success": True,
@@ -156,10 +168,16 @@ async def search_cheapest_dates(
         departure_date=request.departure_date,
         duration=request.duration,
         one_way=(request.trip_type == "one-way"),
+        flexibility_days=request.flexibility_days,
+        adults=request.adults,
+        currency=request.currency,
+        non_stop=request.non_stop,
     )
 
     if not result["success"]:
-        raise HTTPException(status_code=404, detail=result["message"])
+        raise HTTPException(
+            status_code=result.get("status_code", 502), detail=result["message"]
+        )
 
     return {
         "success": True,
@@ -183,7 +201,9 @@ async def get_airport_info(
     result = await amadeus_service.get_airport_info(validated_code)
 
     if not result["success"]:
-        raise HTTPException(status_code=404, detail=result["message"])
+        raise HTTPException(
+            status_code=result.get("status_code", 502), detail=result["message"]
+        )
 
     return {"success": True, "message": "공항 정보 조회 완료", "data": result["data"]}
 
