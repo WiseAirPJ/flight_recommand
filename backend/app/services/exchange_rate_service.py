@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from dataclasses import asdict, dataclass
@@ -82,7 +83,7 @@ class ExchangeRateService:
                 raise ValueError("YYYYMMDD 형식 필요")
             datetime.strptime(date, "%Y%m%d")
             key = f"exchange_rate:v2:{date}"
-            cached = self.cache_service.get_cache(key)
+            cached = await asyncio.to_thread(self.cache_service.get_cache, key)
             if cached:
                 rates = [ExchangeRate(**item) for item in cached["rates"]]
                 now = cached["updated_at"]
@@ -96,7 +97,8 @@ class ExchangeRateService:
                         False, [], now, error_message="해당 날짜의 환율이 없습니다."
                     )
                 # Cache the full table so a previous JPY request cannot poison a USD request.
-                self.cache_service.set_cache(
+                await asyncio.to_thread(
+                    self.cache_service.set_cache,
                     key,
                     {"rates": [rate.to_dict() for rate in rates], "updated_at": now},
                     self.cache_ttl,
