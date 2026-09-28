@@ -43,7 +43,7 @@ MANIFEST
 venv/
 ENV/
 env/
-.env
+backend/.env
 .venv
 
 # pytest
@@ -65,7 +65,7 @@ dmypy.json
 .python-version
 
 # 환경변수 파일
-.env
+backend/.env
 .env.local
 .env.development
 .env.test

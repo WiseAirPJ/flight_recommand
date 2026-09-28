@@ -1,0 +1,114 @@
+# Pre-commit hooks 설정
+# 커밋 전 자동으로 코드 품질을 검사하고 포맷팅을 수행합니다.
+
+repos:
+  # Python 코드 포맷팅
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+        name: "🎨 Black (Python 포맷터)"
+        language_version: python3.12
+        args: [--line-length=88, --target-version=py312]
+        exclude: ^(migrations/|venv/|\.venv/)
+
+  # Import 정렬
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        name: "📦 isort (Import 정렬)"
+        args: [--profile=black, --line-length=88, --multi-line=3]
+        exclude: ^(migrations/|venv/|\.venv/)
+
+  - repo: local
+    hooks:
+      - id: flake8
+        name: "🔍 Flake8 (린팅)"
+        entry: bash -c 'flake8 --max-line-length=88 --extend-ignore=E203,W503,E501,D --max-complexity=10 --exclude=migrations,venv,.venv .'
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # 일반적인 코드 품질 검사
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      # 파일 끝 공백 제거
+      - id: trailing-whitespace
+        name: "✂️ 파일 끝 공백 제거"
+        exclude: ^(\.md$|\.txt$)
+
+      # 파일 끝 개행 확인
+      - id: end-of-file-fixer
+        name: "📄 파일 끝 개행 확인"
+
+      # 대용량 파일 체크
+      - id: check-added-large-files
+        name: "📏 대용량 파일 체크"
+        args: [--maxkb=1000]
+
+      # YAML 문법 검사
+      - id: check-yaml
+        name: "📋 YAML 문법 검사"
+        args: [--allow-multiple-documents]
+
+      # XML 문법 검사
+      - id: check-xml
+        name: "📋 XML 문법 검사"
+
+      # TOML 문법 검사
+      - id: check-toml
+        name: "📋 TOML 문법 검사"
+
+      # Merge conflict 표시 체크
+      - id: check-merge-conflict
+        name: "🔀 Merge conflict 체크"
+
+      # Case conflict 체크 (대소문자)
+      - id: check-case-conflict
+        name: "🔤 파일명 대소문자 충돌 체크"
+
+      # 디버그 구문 체크
+      - id: debug-statements
+        name: "🐛 디버그 구문 체크"
+
+      # 개인정보 체크 (기본)
+      - id: detect-private-key
+        name: "🔐 개인키 노출 체크"
+
+  # Jupyter Notebook 정리
+  - repo: https://github.com/nbQA-dev/nbQA
+    rev: 1.7.1
+    hooks:
+      - id: nbqa-black
+        name: "📓 Jupyter Notebook 포맷팅"
+        args: [--line-length=88]
+      - id: nbqa-isort
+        name: "📓 Jupyter Notebook Import 정렬"
+        args: [--profile=black]
+
+  # 커밋 메시지 검사
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v3.13.0
+    hooks:
+      - id: commitizen
+        name: "💬 커밋 메시지 검사"
+        stages: [commit-msg]
+
+# Pre-commit 설정
+default_stages: [pre-commit]
+fail_fast: false
+
+# CI에서 실행할 추가 훅
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false
