@@ -1,121 +1,73 @@
-"""Schedule monthly collection without mixing task dispatch with cache storage."""
+"""Admin collection requests use the same leased jobs as map queries and Beat."""
 
-import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
 
 from app.config.settings import settings
 from app.models.flight_requests import MonthlySearchRequest
-from app.services.cache_service import CacheService
-from app.utils.cache_keys import monthly_search_key
-
-logger = logging.getLogger(__name__)
+from app.services.monthly_search_service import MonthlySearchService
 
 
 class CacheRefreshService:
-    def __init__(self, cache_service=None):
-        self.cache = cache_service if cache_service is not None else CacheService()
+    def __init__(self, search_service=None):
+        self.search = search_service or MonthlySearchService()
 
     def _get_months_to_refresh(self, months_ahead=2):
         today = datetime.now().date()
-        months = []
-        for offset in range(months_ahead):
-            year, month = divmod(today.year * 12 + today.month - 1 + offset, 12)
-            months.append((year, month + 1))
-        return months
+        return [
+            (ordinal // 12, ordinal % 12 + 1)
+            for ordinal in range(
+                today.year * 12 + today.month - 1,
+                today.year * 12 + today.month - 1 + months_ahead,
+            )
+        ]
 
-    def refresh_cache(
-        self,
-        regions: Optional[List[str]] = None,
-        force_update: bool = False,
-        origin: str = "ICN",
-    ) -> Dict[str, Any]:
-        """캐시 데이터 갱신"""
-        try:
-            from app.tasks.monthly_data_collection import collect_monthly_cheapest_data
-
-            refresh_info = {
-                "started_at": datetime.now().isoformat(),
-                "origin": origin,
-                "regions": "all",
-                "requested_regions": regions,
-                "force_update": force_update,
-                "tasks_created": [],
-            }
-
-            from app.services.amadeus_service import AmadeusService
-
-            source = AmadeusService().source
-            for year, month in self._get_months_to_refresh():
-                cache_key = monthly_search_key(
-                    MonthlySearchRequest(origin=origin, year=year, month=month),
-                    source,
+    def _schedule(self, origins, months, force_update, regions):
+        tasks, failures = [], []
+        for year, month in months:
+            for origin in origins:
+                result = self.search.request(
+                    MonthlySearchRequest(year=year, month=month, origin=origin),
+                    force_refresh=force_update,
                 )
-
-                if force_update or not self.cache.is_cache_valid(cache_key):
-                    task = collect_monthly_cheapest_data.delay(year, month, origin)
-                    refresh_info["tasks_created"].append(
+                if (
+                    not result["success"]
+                    or result.get("data", {}).get("refresh_status") == "failed"
+                ):
+                    failures.append({"year": year, "month": month, "origin": origin})
+                elif result.get("enqueued"):
+                    tasks.append(
                         {
-                            "task_id": task.id,
+                            "task_id": result["data"]["job_id"],
                             "year": year,
                             "month": month,
-                            "cache_key": cache_key,
-                        }
-                    )
-                    logger.info(f"캐시 갱신 태스크 생성: {year}-{month:02d}")
-
-            return {
-                "success": True,
-                "message": f"{len(refresh_info['tasks_created'])}개 갱신 태스크 생성",
-                "data": refresh_info,
-            }
-
-        except Exception as e:
-            logger.error(f"캐시 갱신 실패: {str(e)}")
-            return {
-                "success": False,
-                "message": f"캐시 갱신 실패: {str(e)}",
-                "data": {},
-            }
-
-    def warmup_cache(
-        self, regions: Optional[List[str]] = None, months_ahead: int = 3
-    ) -> Dict[str, Any]:
-        """캐시 워밍업"""
-        try:
-            from app.tasks.monthly_data_collection import collect_monthly_cheapest_data
-
-            warmup_info = {
-                "started_at": datetime.now().isoformat(),
-                "regions": "all",
-                "requested_regions": regions,
-                "months_ahead": months_ahead,
-                "tasks_created": [],
-            }
-
-            for target_year, target_month in self._get_months_to_refresh(months_ahead):
-                for origin in settings.COLLECTION_ORIGINS:
-                    task = collect_monthly_cheapest_data.delay(
-                        target_year, target_month, origin
-                    )
-                    warmup_info["tasks_created"].append(
-                        {
-                            "task_id": task.id,
-                            "year": target_year,
-                            "month": target_month,
                             "origin": origin,
                         }
                     )
+        return {
+            "success": not failures,
+            "message": f"{len(tasks)}개 수집 태스크 생성",
+            "data": {
+                "started_at": datetime.now().isoformat(),
+                "regions": "all",
+                "requested_regions": regions,
+                "tasks_created": tasks,
+                "failed_requests": failures,
+            },
+        }
 
-            return {
-                "success": True,
-                "message": f"{len(warmup_info['tasks_created'])}개 워밍업 태스크 생성",
-                "data": warmup_info,
-            }
+    def refresh_cache(self, regions=None, force_update=False, origin="ICN"):
+        result = self._schedule(
+            [origin], self._get_months_to_refresh(), force_update, regions
+        )
+        result["data"].update(origin=origin, force_update=force_update)
+        return result
 
-        except Exception as e:
-            return {
-                "success": False,
-                "message": f"캐시 워밍업 실패: {str(e)}",
-                "data": {},
-            }
+    def warmup_cache(self, regions=None, months_ahead=3):
+        result = self._schedule(
+            settings.COLLECTION_ORIGINS,
+            self._get_months_to_refresh(months_ahead),
+            True,
+            regions,
+        )
+        result["data"]["months_ahead"] = months_ahead
+        return result
