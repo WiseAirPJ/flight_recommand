@@ -2,10 +2,10 @@ name: Backend CI
 on:
   push:
     branches: [main, develop, 'feat/**', 'refactor/**', 'fix/**', 'chore/**']
-    paths: ['backend/**', '.github/workflows/backend-ci.yml', '.pre-commit-config.yaml']
+    paths: ['backend/**', '.github/workflows/backend-ci.yml']
   pull_request:
     branches: [main, develop]
-    paths: ['backend/**', '.github/workflows/backend-ci.yml', '.pre-commit-config.yaml']
+    paths: ['backend/**', '.github/workflows/backend-ci.yml']
 permissions:
   contents: read
 jobs:

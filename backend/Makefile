@@ -4,7 +4,7 @@ RUN = $(UV) run --locked
 SOURCES = app tests conftest.py alembic
 CORE_COVERAGE = app/main.py,app/api/v1/flights.py,app/api/v1/regions.py,app/config/settings.py,app/core/database.py,app/models/flight_requests.py,app/services/amadeus_service.py,app/services/exchange_rate_service.py,app/services/monthly_price_analyzer.py,app/services/monthly_search_service.py,app/services/provider_http.py,app/services/provider_source.py,app/services/price_history_service.py,app/tasks/monthly_data_collection.py,app/utils/cache_keys.py,app/utils/decorators.py,app/utils/response_enhancers.py
 
-.PHONY: help install install-dev setup-dev dev worker beat migrate format lint test test-cov coverage-check check ci lock export-requirements pre-commit install-pre-commit typecheck security
+.PHONY: help install install-dev setup-dev dev worker beat migrate format lint test test-cov coverage-check check ci lock export-requirements typecheck security
 
 help: ## 사용 가능한 명령
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "%-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -61,12 +61,6 @@ lock: ## 선언한 의존성 변경을 잠금 파일에 반영
 export-requirements: ## pip 전용 도구에 전달할 운영 의존성 내보내기
 	@mkdir -p dist
 	$(UV) export --locked --no-dev --no-emit-project --format requirements-txt --output-file dist/requirements.txt
-
-pre-commit: ## 설정된 모든 커밋 전 검사 실행
-	$(RUN) pre-commit run --all-files
-
-install-pre-commit: ## 선택적으로 Git 훅 설치
-	$(RUN) pre-commit install
 
 typecheck: ## 선택적 기존 코드 타입 검사
 	$(RUN) mypy app
